@@ -1,0 +1,28 @@
+Package: simTidal
+Type: Package
+Title: simulate drifter & fish movements through the Minas Passage
+Version: 0.01
+Date: 2026-03-05
+Author: Ian Jonsen
+Maintainer: Ian Jonsen <ian.jonsen@mq.edu.au>
+Description: simulate drifter & fish movements as compound biased random walks with or without advection, simulate HR acoustic tag transimissons and detections along movement paths, conditional on real or simulated accoustic reciver arrays
+Depends: R (>= 4.5.0)
+Imports: 
+    dplyr,
+    ggplot2,
+    gganimate,
+    raster,
+    sp,
+    tibble,
+    readr,
+    CircStats,
+    stats,
+    sf,
+    stars,
+    patchwork
+License: AGPL-3
+Encoding: UTF-8
+LazyData: true
+RoxygenNote: 7.3.3
+Suggests: 
+    rgeos
