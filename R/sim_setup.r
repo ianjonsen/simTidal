@@ -2,40 +2,84 @@
 #'
 #' @description load required rasters, receiver locations
 #'
+#' @author Ian Jonsen \email{jonsen@stochastic-qc.org}
 #'
-#' @author Ian Jonsen \email{ian.jonsen@mq.edu.au}
+#' @param config - path to config.R script containing file.paths for required
+#'   & optional environmental layers (see Details)
+#' @param month - month name matching the u/v subdirectories produced by
+#'   \code{process_month()} in \code{create_envt.R}, e.g. \code{"July"}.
+#'   Must be one of \code{"May"}, \code{"June"}, \code{"July"}, \code{"August"}.
+#' @param year  - 2-digit year suffix, e.g. \code{"22"}
 #'
-#' @param config - path to config.R script containing file.paths for required & optional environmental layers (see Details)
-#' @importFrom raster raster stack brick projectRaster extract
-#' @importFrom sp coordinates<- proj4string<- CRS spTransform SpatialPointsDataFrame spsample
-#' @importFrom sf st_as_sf st_sample st_coordinates st_distance
-#' @importFrom dplyr select filter rename bind_cols %>% tibble distinct
+#' @details Loads u and v as lazy file-backed SpatRasters built directly from
+#'   the per-day files written by \code{process_month()}. No large assembled
+#'   file is needed or written: \code{terra::rast(file_vector)} provides an
+#'   identical interface to a single-file stack but reads only the specific
+#'   tiles needed at each \code{extract()} call.
+#'
+#'   \code{fvcom.origin} and \code{fvcom_step_secs} are derived from the first
+#'   two u layer names so neither needs to be set manually in \code{mpar}.
+#'
+#' @importFrom terra rast nlyr
 #' @export
 #'
-sim_setup <-
-  function(config = config) {
+sim_setup <- function(config = config,
+                      month  = "July",
+                      year   = "22") {
 
-    suppressWarnings(source(config, local = TRUE, echo=FALSE))
-    if(is.null(prj)) prj <- "+proj=stere +lat_0=90 +lon_0=-100 +k=0.933012425899506 +x_0=4245000 +y_0=5295000 +R=6371229 +units=km +no_defs"
+  month <- match.arg(month, choices = c("May", "June", "July", "August"))
 
-    out <- list(
-      bathy = suppressWarnings(raster(bathy)),
-      land = suppressWarnings(raster(d2land)),
-      land_dir = suppressWarnings(raster(land_dir))
-    )
+  suppressWarnings(source(config, local = TRUE, echo = FALSE))
+  if (is.null(prj)) prj <- "+proj=utm +zone=20 +units=km +datum=WGS84 +no_defs +type=crs"
 
-    out[["u"]] <- suppressWarnings(stack(file.path(riops, "riops_doy_u.grd")))
-    out[["v"]] <- suppressWarnings(stack(file.path(riops, "riops_doy_v.grd")))
-    out[["ts"]] <- suppressWarnings(stack(file.path(riops, "riops_doy_t.grd")))
+  out <- list(
+    bathy  = suppressWarnings(rast(bathy)),
+    land   = suppressWarnings(rast(land)),
+    d2land = suppressWarnings(rast(d2land)),
+    grad   = suppressWarnings(rast(grad))
+  )
 
-    out[["recLocs"]] <- esrf_rec
-    out[["recPoly"]] <- recPoly_sf
+  ## Load u and v as lazy stacks from per-day files produced by process_month().
+  ## terra::rast(character_vector) creates a file-backed SpatRaster that spans
+  ## all files without loading any data into RAM — equivalent to a single large
+  ## file but without the cost of writing one (no 14+ GB assembly step).
+  ## Files are sorted numerically by day index (zero-padded: u_July01.tif, ...).
+  u_dir <- file.path(fvcom, "u", month)
+  v_dir <- file.path(fvcom, "v", month)
 
-    out[["sobi.box"]] <- c(980,1030,1230,1275)
-    out[["esrfPoly"]] <- readRDS(file.path(polygon.file, "NLpoly.RDS"))
+  for (d in c(u_dir, v_dir))
+    if (!dir.exists(d))
+      stop("Directory not found: ", d,
+           "\n  Run process_month('", month, "', year = '", year,
+           "') in create_envt.R first.")
 
+  u_files <- sort(list.files(u_dir, pattern = "\\.tif$", full.names = TRUE))
+  v_files <- sort(list.files(v_dir, pattern = "\\.tif$", full.names = TRUE))
 
-    out[["prj"]] <- prj
+  if (length(u_files) == 0) stop("No u raster files found in: ", u_dir)
+  if (length(v_files) == 0) stop("No v raster files found in: ", v_dir)
+  if (length(u_files) != length(v_files))
+    stop("Unequal number of u (", length(u_files), ") and v (",
+         length(v_files), ") day-files in ", month, " directories.")
 
-    return(out)
-  }
+  out[["u"]] <- suppressWarnings(rast(u_files))
+  out[["v"]] <- suppressWarnings(rast(v_files))
+
+  ## Derive fvcom.origin and step interval from the first two u layer names
+  ## (encoded as "ua_YYYYMMDDTHHMMz"). Stored in data so sim_drifter() and
+  ## validate_mpar() never need to read layer names themselves.
+  parse_lyr_time <- function(nm)
+    as.POSIXct(sub("^ua_", "", nm), format = "%Y%m%dT%H%Mz", tz = "UTC")
+  u_names <- terra::names(out[["u"]])
+  out[["fvcom.origin"]]    <- parse_lyr_time(u_names[1])
+  out[["fvcom_step_secs"]] <- as.numeric(
+    difftime(parse_lyr_time(u_names[2]),
+             parse_lyr_time(u_names[1]), units = "secs")
+  )
+
+  out[["month"]] <- month
+  out[["year"]]  <- year
+  out[["prj"]]   <- prj
+
+  return(out)
+}

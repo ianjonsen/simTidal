@@ -4,19 +4,25 @@
 \alias{sim_drifter}
 \title{simulate drifter advection by surface currents from user-specified start location(s)}
 \usage{
-sim_drifter(id = 1, data = NULL, mpar = sim_par(), pb = TRUE)
+sim_drifter(id = 1, data = NULL, mpar = NULL, pb = TRUE)
 }
 \arguments{
-\item{id}{- identifier for simulation run (individual drifter)}
+\item{id}{identifier for simulation run (individual drifter)}
 
-\item{data}{- a list of required data from \code{sim_setup}}
+\item{data}{a list of required data from \code{sim_setup()}}
 
-\item{mpar}{- simulation control parameters supplied as a list, see details}
+\item{mpar}{simulation control parameters from \code{drifter_par()},
+\code{bcrw_par()}, or \code{bcrw_coa_par()}}
 
-\item{pb}{- use progress bar (logical)}
+\item{pb}{use progress bar (logical)}
 }
 \description{
 simulates drifter advection
+}
+\details{
+\code{fvcom.origin} and \code{fvcom_step_secs} are read from
+  \code{data} (set automatically by \code{sim_setup()}), with fallback to
+  \code{mpar$fvcom.origin} for backward compatibility.
 }
 \author{
 Ian Jonsen \email{ian.jonsen@mq.edu.au}
