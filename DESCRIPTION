@@ -1,11 +1,11 @@
 Package: simTidal
 Type: Package
-Title: simulate drifter & fish movements through the Minas Passage
+Title: simulate drifter advection through the Minas Passage
 Version: 0.1
 Date: 2026-03-23
 Author: Ian Jonsen
 Maintainer: Ian Jonsen <ian.jonsen@mq.edu.au>
-Description: simulate drifter & fish movements as compound biased random walks with or without advection, simulate HR acoustic tag transimissons and detections along movement paths, conditional on real or simulated accoustic reciver arrays
+Description: simulate drifter tracks as compound biased random walks with or without advection, simulate HR acoustic tag transimissons and detections along movement paths, conditional on real or simulated accoustic reciver arrays
 Depends: R (>= 4.5.0)
 Imports: 
     dplyr,
