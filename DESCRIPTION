@@ -1,7 +1,7 @@
 Package: simTidal
 Type: Package
 Title: simulate drifter advection through the Minas Passage
-Version: 0.1
+Version: 0.1-2
 Date: 2026-03-23
 Author: Ian Jonsen
 Maintainer: Ian Jonsen <ian.jonsen@mq.edu.au>

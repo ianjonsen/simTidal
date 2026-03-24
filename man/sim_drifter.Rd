@@ -23,6 +23,11 @@ simulates drifter advection
 \code{fvcom.origin} and \code{fvcom_step_secs} are read from
   \code{data} (set automatically by \code{sim_setup()}), with fallback to
   \code{mpar$fvcom.origin} for backward compatibility.
+
+  When \code{data} was built from multiple months via \code{sim_setup()},
+  the u/v stacks span the full date range and \code{sim_drifter()} works
+  without modification — layer indices are derived from elapsed time since
+  \code{fvcom.origin} regardless of how many months the stack covers.
 }
 \author{
 Ian Jonsen \email{ian.jonsen@mq.edu.au}

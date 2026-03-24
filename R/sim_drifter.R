@@ -14,6 +14,11 @@
 #'   \code{data} (set automatically by \code{sim_setup()}), with fallback to
 #'   \code{mpar$fvcom.origin} for backward compatibility.
 #'
+#'   When \code{data} was built from multiple months via \code{sim_setup()},
+#'   the u/v stacks span the full date range and \code{sim_drifter()} works
+#'   without modification — layer indices are derived from elapsed time since
+#'   \code{fvcom.origin} regardless of how many months the stack covers.
+#'
 #' @importFrom terra extract xyFromCell nlyr
 #' @importFrom CircStats rwrpcauchy
 #' @importFrom dplyr %>% mutate lag filter
@@ -71,7 +76,8 @@ sim_drifter <- function(
 
   u <- v <- vector("numeric", N)
 
-  n_u_layers <- nlyr(data$u)
+  n_u_layers  <- nlyr(data$u)
+  data_end_dt <- fvcom.origin + n_u_layers * step_secs
 
   ## ---- Handle sub-interval start.dt ----------------------------------------
   ##
@@ -92,7 +98,6 @@ sim_drifter <- function(
   } else if (mpar$interp) {
     w <- remainder / step_secs    # fractional weight toward next layer; in (0, 1)
   } else {
-    ## Save original start.dt for the warning message before modifying
     original_dt <- mpar$start.dt
     if (remainder < step_secs / 2) {
       mpar$start.dt <- mpar$start.dt - remainder
@@ -106,18 +111,24 @@ sim_drifter <- function(
     w <- 0
   }
 
-  ## Bounds checks are placed after snapping so that a start.dt snapped
-  ## forward cannot silently exceed the available data range.
+  ## Bounds checks placed after snapping so a forward-snapped start.dt cannot
+  ## silently exceed the available data range.
   if (mpar$start.dt < fvcom.origin)
-    stop("Simulation start time is earlier than available FVCOM data\n",
-         "  fvcom.origin: ", format(fvcom.origin), "\n",
-         "  start.dt:     ", format(mpar$start.dt))
+    stop("Simulation start time is earlier than available FVCOM data.\n",
+         "  data covers: ", format(fvcom.origin), " to ", format(data_end_dt), "\n",
+         "  start.dt:    ", format(mpar$start.dt))
 
-  if (mpar$start.dt > (fvcom.origin + n_u_layers * step_secs))
-    stop("Simulation start time is later than available FVCOM data")
+  if (mpar$start.dt > data_end_dt)
+    stop("Simulation start time is later than available FVCOM data.\n",
+         "  data covers: ", format(fvcom.origin), " to ", format(data_end_dt), "\n",
+         "  start.dt:    ", format(mpar$start.dt), "\n",
+         "  Tip: re-run sim_setup() with additional months.")
 
-  if ((mpar$start.dt + N * step_secs) > (fvcom.origin + n_u_layers * step_secs))
-    stop("Simulation timeframe extends beyond the available FVCOM data")
+  sim_end_dt <- mpar$start.dt + N * step_secs
+  if (sim_end_dt > data_end_dt)
+    stop("Simulation end time (", format(sim_end_dt),
+         ") extends beyond available FVCOM data (", format(data_end_dt), ").\n",
+         "  Reduce N or re-run sim_setup() with additional months.")
 
   ## round() before as.integer() guards against floating-point precision issues
   ## (e.g. 599.9999.../600 truncating to 0 instead of 1 after snapping).
@@ -127,14 +138,12 @@ sim_drifter <- function(
 
   ## Pre-compute layer indices for every simulation step.
   ## For loop step i (2..N), the lower bracketing FVCOM layer is (i-1) + fvcom.idx.
-  ## When interp = TRUE, the upper layer is layer_idx + 1.
-  ## Bounds check ensures layer_idx + 1 never exceeds nlyr(data$u).
   layer_idx <- seq_len(N - 1L) + fvcom.idx
 
   if (mpar$interp && w > 0 && max(layer_idx) >= n_u_layers)
     stop("Simulation timeframe requires layer ", max(layer_idx) + 1L,
          " but data$u only has ", n_u_layers, " layers.\n",
-         "  Reduce N or choose an earlier start.dt.")
+         "  Reduce N or re-run sim_setup() with additional months.")
 
   ## ---- Main loop -----------------------------------------------------------
 
@@ -146,13 +155,11 @@ sim_drifter <- function(
     if (mpar$advect) {
       k <- layer_idx[i - 1L]
       if (w == 0) {
-        ## Snap: single extract per component
         u[i] <- extract(data$u[[k]], rbind(xy[i - 1, ]),
                         method = "simple")[1, 1] * advect_scale * mpar$uvm[1]
         v[i] <- extract(data$v[[k]], rbind(xy[i - 1, ]),
                         method = "simple")[1, 1] * advect_scale * mpar$uvm[2]
       } else {
-        ## Interpolate: weighted average of layers k and k+1
         u[i] <- ((1 - w) * extract(data$u[[k]],      rbind(xy[i - 1, ]), method = "simple")[1, 1] +
                        w  * extract(data$u[[k + 1L]], rbind(xy[i - 1, ]), method = "simple")[1, 1]) *
                  advect_scale * mpar$uvm[1]
@@ -184,17 +191,18 @@ sim_drifter <- function(
 
   ## ---- Assemble output -----------------------------------------------------
 
-  N <- ifelse(!is.na(which(is.na(xy[, 1]))[1] - 1),
-              which(is.na(xy[, 1]))[1] - 1, N)
+  ## Trim N to the last valid row if the simulation stopped early.
+  first_na <- which(is.na(xy[, 1]))[1]
+  N <- if (is.na(first_na)) N else first_na - 1L
 
   sim <- data.frame(
-    x  = xy[, 1],
-    y  = xy[, 2],
-    dx = ds[, 1] - lag(xy[, 1]),
-    dy = ds[, 2] - lag(xy[, 2]),
-    u  = u,
-    v  = v
-  )[1:N, ] %>%
+    x  = xy[1:N, 1],
+    y  = xy[1:N, 2],
+    dx = ds[1:N, 1] - xy[1:N, 1],
+    dy = ds[1:N, 2] - xy[1:N, 2],
+    u  = u[1:N],
+    v  = v[1:N]
+  ) %>%
     as_tibble()
 
   if (mpar$land | mpar$boundary)
