@@ -145,6 +145,11 @@ sim_drifter <- function(
          " but data$u only has ", n_u_layers, " layers.\n",
          "  Reduce N or re-run sim_setup() with additional months.")
 
+  ## set mpar$uvm to a 4-element vector if supplied vector has 2 elements
+  if(length(mpar$uvm) == 2) {
+    mpar$uvm <- c(mpar$uvm[1], mpar$uvm[1], mpar$uvm[2], mpar$uvm[2])
+  }
+
   ## ---- Main loop -----------------------------------------------------------
 
   for (i in 2:N) {
@@ -155,10 +160,13 @@ sim_drifter <- function(
     if (mpar$advect) {
       k <- layer_idx[i - 1L]
       if (w == 0) {
-        u[i] <- extract(data$u[[k]], rbind(xy[i - 1, ]),
-                        method = "simple")[1, 1] * advect_scale * mpar$uvm[1]
-        v[i] <- extract(data$v[[k]], rbind(xy[i - 1, ]),
-                        method = "simple")[1, 1] * advect_scale * mpar$uvm[2]
+        tmp.u <- extract(data$u[[k]], rbind(xy[i - 1, ]),
+                        method = "simple")[1, 1] * advect_scale
+        tmp.v[i] <- extract(data$v[[k]], rbind(xy[i - 1, ]),
+                            method = "simple")[1, 1] * advect_scale
+        u[i] <- ifelse(tmp.u < 0, tmp.u * mpar$uvm[1], tmp.u * mpar$uvm[2])
+        v[i] <- ifelse(tmp.u < 0, tmp.v * mpar$uvm[3], tmp.u * mpar$uvm[4])
+
       } else {
         u[i] <- ((1 - w) * extract(data$u[[k]],      rbind(xy[i - 1, ]), method = "simple")[1, 1] +
                        w  * extract(data$u[[k + 1L]], rbind(xy[i - 1, ]), method = "simple")[1, 1]) *

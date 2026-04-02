@@ -50,8 +50,8 @@
 }
 
 .check_uvm <- function(x) {
-  if (!is.numeric(x) || !length(x) %in% c(1L, 2L))
-    stop("uvm must be a numeric scalar or 2-element vector")
+  if (!is.numeric(x) || !length(x) %in% c(1L, 2L, 4L))
+    stop("uvm must be a numeric scalar, 2-element vector, or 4-element vector")
   if (any(x < 0))
     stop("uvm values must be >= 0")
 }
