@@ -2,11 +2,85 @@
 % Please edit documentation in R/move_kernel.R
 \name{move_kernel}
 \alias{move_kernel}
-\title{random walk movement kernel for Miramichi smolts}
+\title{Movement kernel for fish and drifter simulations}
 \usage{
-move_kernel(data, xy = NULL, mpar, s, i)
+move_kernel(data, xy = NULL, mpar, s, i, end_xy = NULL)
+}
+\arguments{
+\item{data}{Environmental data list from \code{\link{sim_setup}}, or
+\code{NULL}. Elements \code{data$land} and \code{data$grad} are used
+for land-avoidance. The entire land-avoidance block is skipped when
+\code{data$land} is \code{NULL}.}
+
+\item{xy}{Current state vector \code{c(x, y, heading)} in km and
+radians. The heading (element 3) is the animal's current travel
+direction and is read by \code{"crw"} (bias = previous heading),
+\code{"bcrw.coa"} (blended with CoA bearing), and
+\code{"crw.bridge"} (blended with bearing toward \code{end_xy});
+it is not read by \code{"bcrw"} or \code{"drifter"}.}
+
+\item{mpar}{Parameter list produced by \code{\link{fish_par}} or one
+of the \code{*_par} constructors. Fields accessed depend on
+\code{mpar$move}; see \code{\link{fish_par}} for details.}
+
+\item{s}{Swimming step size in km per step, pre-computed by the
+calling function as
+\code{fl / 1000 * bl * 60 * time.step}.
+Ignored when \code{move = "drifter"}.}
+
+\item{i}{Current simulation step index (integer). Used by
+\code{"bcrw"} to index time-varying \code{mpar$bearing} or
+\code{mpar$bl} vectors. Also used by \code{"crw.bridge"} to compute
+the time-varying attraction weight \code{nu_i}. Not used by
+\code{"crw"}, \code{"bcrw.coa"}, or \code{"drifter"}.}
+
+\item{end_xy}{Per-simulation sampled end position, \code{c(x, y)} in
+km. Required (non-\code{NULL}) when \code{mpar$move = "crw.bridge"};
+ignored by all other movement models. Default \code{NULL}.}
+}
+\value{
+For \code{move \%in\% c("crw", "crw.bridge", "bcrw", "bcrw.coa")}: a
+  length-3 numeric vector \code{c(x_new, y_new, mu)}, where \code{mu}
+  is the step heading in radians (to be stored and passed back as
+  \code{xy[3]} on the next call). For \code{move = "drifter"}: a
+  length-2 vector \code{c(x_new, y_new)}.
 }
 \description{
-utility function not to be called by user
+Internal step function called at each time step by
+  \code{\link{sim_fish}} and \code{\link{sim_drifter}}. Computes a
+  proposed new position from the movement process specified in
+  \code{mpar$move}, applies the land-avoidance potential when
+  \code{data$land} is present, and returns the accepted position.
+
+  Four active swimming processes are supported:
+  \describe{
+    \item{\code{"crw"}}{Correlated random walk. The next heading is
+      drawn from a Wrapped Cauchy distribution centred on the
+      \emph{previous} heading (\code{xy[3]}). No external directional
+      bias; step-to-step persistence is controlled entirely by
+      \code{mpar$rho}.}
+    \item{\code{"bcrw"}}{Biased correlated random walk toward a fixed
+      bearing. The Wrapped Cauchy distribution is centred on
+      \code{mpar$bearing[i]} rather than the previous heading, so the
+      animal is persistently pulled toward that compass direction.}
+    \item{\code{"bcrw.coa"}}{Biased correlated random walk toward a
+      Centre of Attraction. The bias direction is a weighted blend of
+      the previous heading (\code{xy[3]}) and the instantaneous bearing
+      toward \code{mpar$coa}, with blend strength \code{mpar$nu}.}
+    \item{\code{"crw.bridge"}}{Brownian bridge correlated random walk.
+      The bias direction is a weighted blend of the previous heading and
+      the bearing toward \code{end_xy} (the per-simulation sampled end
+      position). Blend weight \code{nu_i = mpar$nu * i / max(N - i, 1)}
+      grows from near-zero at the first step to very large at the final
+      step, ensuring the path is progressively drawn toward
+      \code{end_xy}.}
+  }
+  A fifth passive process, \code{"drifter"}, produces no active
+  displacement; optional Gaussian noise can be added via
+  \code{mpar$noise}.
+}
+\seealso{
+\code{\link{sim_fish}}, \code{\link{sim_drifter}},
+  \code{\link{fish_par}}
 }
 \keyword{internal}
