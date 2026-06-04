@@ -4,10 +4,9 @@
 #'   conditioned on two acoustic detection events (known times, uncertain
 #'   locations). Each simulation:
 #'   \enumerate{
-#'     \item Samples a start position uniformly within \code{det.range} of
-#'       the start receiver. For \code{move = "crw.bridge"}, an end
-#'       position is also sampled within \code{det.range} of the end
-#'       receiver.
+#'     \item Samples a start position (and, for \code{move = "crw.bridge"},
+#'       also an end position) uniformly within \code{det.range} of the
+#'       respective receiver.
 #'     \item Propagates a movement model — with or without FVCOM tidal
 #'       advection — for \code{N} steps, where \code{N} is derived
 #'       automatically from the elapsed time between detections.
@@ -30,13 +29,20 @@
 #'   \describe{
 #'     \item{\code{sims}}{List of \code{n_sim} tibbles, each with columns
 #'       \code{id}, \code{date}, \code{x}, \code{y}, \code{u}, \code{v}.
-#'       All simulations are returned, including rejected ones.}
+#'       Accepted tracks are truncated at the detection step; all others
+#'       run to step \code{N} (or the last valid step if stopped early).}
 #'     \item{\code{accepted}}{Logical vector of length \code{n_sim};
-#'       \code{TRUE} when the simulation ended within \code{det.range}
-#'       of the end receiver.}
-#'     \item{\code{end_dist}}{Numeric vector (km) — distance from the
-#'       final simulated position to the end receiver, for each simulation.
-#'       \code{NA} for simulations that stopped early (land or boundary).}
+#'       \code{TRUE} when the simulation passed within \code{det.range}
+#'       of the end receiver at any step.}
+#'     \item{\code{end_dist}}{Numeric vector (km) — distance to the end
+#'       receiver at the detection step (accepted) or final step (rejected).
+#'       \code{NA} for simulations stopped early by a boundary condition.}
+#'     \item{\code{det_step}}{Integer vector — step index at which each
+#'       accepted simulation first entered \code{det.range}. \code{NA}
+#'       for rejected simulations.}
+#'     \item{\code{det_locs}}{Tibble with columns \code{id}, \code{x},
+#'       \code{y}, \code{date} — one row per accepted simulation giving
+#'       the position and time of detection.}
 #'     \item{\code{n_accepted}}{Integer; number of accepted simulations.}
 #'     \item{\code{acceptance_rate}}{Fraction of simulations accepted.}
 #'     \item{\code{params}}{The \code{fish_par} object used.}
@@ -63,7 +69,7 @@
 #' )
 #'
 #' ## With tidal advection (requires sim_setup() output)
-#' data <- sim_setup(config, month = c("June", "July"))
+#' data <- sim_setup(config, month = c("June", "July"), year = "2024")
 #' out  <- sim_fish(data, mpar)
 #' print(out)
 #'
@@ -103,11 +109,10 @@
 #' out_noflow <- sim_fish(NULL, mpar_noflow)
 #' }
 #'
-#' @importFrom terra extract xyFromCell nlyr
+#' @importFrom terra extract nlyr
 #' @importFrom CircStats rwrpcauchy
-#' @importFrom dplyr mutate
 #' @importFrom tibble tibble
-#' @importFrom stats runif rnorm
+#' @importFrom stats runif
 #' @export
 
 sim_fish <- function(
@@ -123,22 +128,43 @@ sim_fish <- function(
     stop("mpar must be created with fish_par(), got class: ",
          paste(class(mpar), collapse = ", "))
 
-  ## step_secs is always needed (date-sequence, swimming step size)
+  ## ---- Validate terra objects -----------------------------------------------
+  ## terra SpatRasters rely on a C++ object that can become invalid in several
+  ## ways — most commonly by saving with saveRDS() and reloading without
+  ## terra::wrap() / terra::unwrap(), or if terra was updated without
+  ## restarting R (causing a DLL / Rcpp method-pointer mismatch).
+  ## Detect either failure early and emit a clear message rather than the
+  ## cryptic "NULL value passed as symbol address" error from deep inside terra.
+  if (!is.null(data)) {
+    for (.nm in intersect(names(data), c("u", "v", "land", "bathy", "d2land", "grad"))) {
+      .r <- data[[.nm]]
+      if (inherits(.r, "SpatRaster")) {
+        .ok <- tryCatch({ terra::nlyr(.r); TRUE }, error = function(e) FALSE)
+        if (!.ok)
+          stop(
+            "data$", .nm, " is an invalid SpatRaster.\n",
+            "  Common causes and fixes:\n",
+            "  1. data was saved with saveRDS() and reloaded without terra::wrap() /\n",
+            "     terra::unwrap() — re-run sim_setup() in the current session.\n",
+            "  2. terra was updated without restarting R (DLL / Rcpp pointer mismatch)\n",
+            "     — restart R, then re-run sim_setup().\n",
+            "  3. Corrupted terra installation — reinstall with install.packages('terra').",
+            call. = FALSE
+          )
+      }
+    }
+    rm(.nm, .r, .ok)
+  }
+
   step_secs <- mpar$time.step * 60L
   N    <- mpar$N
   nsim <- mpar$n_sim
 
   ## ---- FVCOM setup (advect = TRUE only) -------------------------------------
-  ##
-  ## When advect = FALSE the user may omit data entirely; land-avoidance
-  ## still works if data$land is present (move_kernel already guards it).
-  ## All FVCOM-specific objects are initialised to safe sentinels here so
-  ## the loop body (which is unconditional) can reference them safely.
-
-  start.dt     <- mpar$start.dt   ## exact detection time; may be snapped below
-  advect_scale <- step_secs / 1000 ## m/s -> km/step (harmless when advect=FALSE)
-  layer_idx    <- NULL             ## populated only when advect=TRUE
-  w            <- 0L               ## temporal interpolation weight
+  start.dt     <- mpar$start.dt
+  advect_scale <- step_secs / 1000   ## m/s -> km/step
+  layer_idx    <- NULL
+  w            <- 0L
 
   if (mpar$advect) {
 
@@ -165,7 +191,6 @@ sim_fish <- function(
     n_u_layers  <- nlyr(data$u)
     data_end_dt <- fvcom.origin + n_u_layers * step_secs
 
-    ## Sub-interval handling: align start.dt to the nearest FVCOM layer
     offset_secs <- as.numeric(difftime(mpar$start.dt, fvcom.origin, units = "secs"))
     remainder   <- offset_secs %% step_secs
 
@@ -187,7 +212,6 @@ sim_fish <- function(
       w <- 0L
     }
 
-    ## Bounds checks
     if (start.dt < fvcom.origin)
       stop("start.dt (", format(start.dt), ") is earlier than available FVCOM data.\n",
            "  data covers: ", format(fvcom.origin), " to ", format(data_end_dt))
@@ -216,9 +240,13 @@ sim_fish <- function(
   ## Swimming step size: body-lengths/s -> km/step
   s_swim <- mpar$fl / 1000 * mpar$bl * 60 * mpar$time.step
 
-  ## For bcrw.coa, pre-compute the heading from start receiver toward CoA
-  ## (constant across simulations; small jitter in start_xy is negligible).
-  ## For crw, a fresh random heading is drawn inside the loop each simulation.
+  ## Hoist invariant flag (avoids repeated NULL checks inside the step loop)
+  has_land <- !is.null(data) && !is.null(data$land)
+
+  ## Pre-compute date sequence (reused for every track)
+  date_seq <- seq(start.dt, by = step_secs, length.out = N)
+
+  ## For bcrw.coa: initial heading from start receiver toward CoA
   init_heading_coa <- if (mpar$move == "bcrw.coa") {
     delta <- mpar$coa - mpar$start
     atan2(delta[1], delta[2])
@@ -226,148 +254,248 @@ sim_fish <- function(
     NULL
   }
 
-  ## ---- Ensemble loop --------------------------------------------------------
-  tracks   <- vector("list", nsim)
-  accepted <- logical(nsim)
-  end_dist <- rep(NA_real_, nsim)
+  ## ---- Pre-allocate arrays --------------------------------------------------
+  ##
+  ## Step-first architecture: all nsim simulations are advanced one step at
+  ## a time, allowing terra::extract() and rwrpcauchy() to be called once
+  ## per step rather than once per simulation per step.
+  ##
+  ## xy_all[sim, step, c(x,y,heading)] — full position history.
+  ## u_mat / v_mat store advection displacements for the output tibbles.
 
+  xy_all         <- array(NA_real_,    c(nsim, N, 3L))
+  u_mat          <- matrix(0,           nsim, N)
+  v_mat          <- matrix(0,           nsim, N)
+  active         <- rep(TRUE,           nsim)
+  detected       <- rep(FALSE,          nsim)
+  early_stop_vec <- rep(FALSE,          nsim)
+  det_step       <- rep(NA_integer_,    nsim)
+  end_dist       <- rep(NA_real_,       nsim)
+
+  ## ---- Vectorised start-position sampling ----------------------------------
+  ang_s <- runif(nsim, 0, 2 * pi)
+  rad_s <- sqrt(runif(nsim)) * mpar$det.range
+  s_x   <- mpar$start[1] + sin(ang_s) * rad_s
+  s_y   <- mpar$start[2] + cos(ang_s) * rad_s
+
+  if (has_land) {
+    on_land_s <- !is.na(terra::extract(data$land, cbind(s_x, s_y))[, 1])
+    s_x[on_land_s] <- mpar$start[1]
+    s_y[on_land_s] <- mpar$start[2]
+  }
+
+  ## Bridge: vectorised end-position sampling
+  sim_end_x <- sim_end_y <- NULL
+  if (mpar$move == "crw.bridge") {
+    ang_e     <- runif(nsim, 0, 2 * pi)
+    rad_e     <- sqrt(runif(nsim)) * mpar$det.range
+    sim_end_x <- mpar$end[1] + sin(ang_e) * rad_e
+    sim_end_y <- mpar$end[2] + cos(ang_e) * rad_e
+    if (has_land) {
+      on_land_e <- !is.na(terra::extract(data$land, cbind(sim_end_x, sim_end_y))[, 1])
+      sim_end_x[on_land_e] <- mpar$end[1]
+      sim_end_y[on_land_e] <- mpar$end[2]
+    }
+  }
+
+  ## Vectorised initial headings
+  init_heads <- switch(mpar$move,
+    crw        = runif(nsim, 0, 2 * pi),
+    bcrw       = rep(mpar$bearing, nsim),
+    bcrw.coa   = rep(init_heading_coa, nsim),
+    crw.bridge = atan2(sim_end_x - s_x, sim_end_y - s_y),
+    rep(NA_real_, nsim)
+  )
+
+  xy_all[, 1L, 1L] <- s_x
+  xy_all[, 1L, 2L] <- s_y
+  xy_all[, 1L, 3L] <- init_heads
+
+  ## ---- Progress bar ---------------------------------------------------------
   if (pb) {
     cat(sprintf(
       "Running %d fish simulations (N = %d steps, %.1f h)  [advect = %s]...\n",
       nsim, N, N * mpar$time.step / 60, mpar$advect
     ))
-    tpb <- txtProgressBar(min = 0, max = nsim, style = 3)
+    tpb <- txtProgressBar(min = 1L, max = N, style = 3)
   }
 
-  for (sim_i in seq_len(nsim)) {
+  ## ---- Step-first ensemble loop --------------------------------------------
+  ##
+  ## At each step, all active simulations are advanced simultaneously:
+  ##   - terra::extract() is called once per step (not once per simulation),
+  ##     reducing calls from nsim*(N-1) to (N-1) for u, v, and land.
+  ##   - rwrpcauchy() is called once per step with a vector of headings.
+  ##
+  ## Land avoidance: if a proposed position is on land, the fish reverts to
+  ## its previous position and continues (reflecting boundary). This replaces
+  ## the gradient-based repulsion in move_kernel, which cannot be batched.
 
-    ## -- Sample start position uniformly within det.range ---------------------
-    ## sqrt(runif) gives uniform area density (not concentrated at centre).
-    angle    <- runif(1, 0, 2 * pi)
-    radius   <- sqrt(runif(1)) * mpar$det.range
-    start_xy <- mpar$start + c(sin(angle), cos(angle)) * radius
+  for (i in seq.int(2L, N)) {
 
-    ## Fall back to receiver location if sampled point is on land
-    if (!is.null(data) && !is.null(data$land) &&
-        !is.na(extract(data$land, rbind(start_xy))[1, 1])) {
-      start_xy <- mpar$start
-    }
+    act   <- which(active)
+    n_act <- length(act)
+    if (n_act == 0L) break
 
-    ## For Brownian bridge: sample a per-simulation end position uniformly
-    ## within det.range of the end receiver (same approach as start).
-    sim_end_xy <- NULL
-    if (mpar$move == "crw.bridge") {
-      e_angle    <- runif(1, 0, 2 * pi)
-      e_radius   <- sqrt(runif(1)) * mpar$det.range
-      sim_end_xy <- mpar$end + c(sin(e_angle), cos(e_angle)) * e_radius
-      ## Fall back to receiver location if sampled point is on land
-      if (!is.null(data) && !is.null(data$land) &&
-          !is.na(extract(data$land, rbind(sim_end_xy))[1, 1])) {
-        sim_end_xy <- mpar$end
+    px <- xy_all[act, i - 1L, 1L]
+    py <- xy_all[act, i - 1L, 2L]
+    ph <- xy_all[act, i - 1L, 3L]
+
+    ## Step size (handles time-varying bl in bcrw)
+    s_i <- if (mpar$move == "bcrw" && length(mpar$bl) > 1L)
+      mpar$fl / 1000 * mpar$bl[i] * 60 * mpar$time.step
+    else
+      s_swim
+
+    ## Angular concentration (handles time-varying rho in bcrw)
+    rho_i <- if (length(mpar$rho) > 1L) mpar$rho[i] else mpar$rho
+
+    ## Mean heading for each active simulation
+    phi <- switch(mpar$move,
+      bcrw = rep(
+        if (length(mpar$bearing) > 1L) mpar$bearing[i] else mpar$bearing,
+        n_act),
+      crw = ph,
+      bcrw.coa = {
+        d_x <- mpar$coa[1] - px
+        d_y <- mpar$coa[2] - py
+        psi <- atan2(d_x, d_y)
+        atan2(sin(ph) + mpar$nu * sin(psi),
+              cos(ph) + mpar$nu * cos(psi))
+      },
+      crw.bridge = {
+        nu_i <- mpar$nu * i / max(mpar$N - i, 1L)
+        d_x  <- sim_end_x[act] - px
+        d_y  <- sim_end_y[act] - py
+        psi  <- atan2(d_x, d_y)
+        atan2(sin(ph) + nu_i * sin(psi),
+              cos(ph) + nu_i * cos(psi))
       }
-    }
-
-    ## State matrix: x | y | heading (radians).
-    ## Heading is carried forward so move_kernel can implement correlated
-    ## turns. Initial heading depends on move type:
-    ##   crw        — random uniform draw (fresh each simulation)
-    ##   bcrw       — fixed bias bearing from mpar
-    ##   bcrw.coa   — direction from start receiver toward CoA (pre-computed)
-    ##   crw.bridge — direction from sampled start toward sampled end
-    init_heading <- switch(mpar$move,
-      crw        = runif(1, 0, 2 * pi),
-      bcrw       = mpar$bearing,
-      bcrw.coa   = init_heading_coa,
-      crw.bridge = atan2(sim_end_xy[1] - start_xy[1],
-                         sim_end_xy[2] - start_xy[2]),
-      NA_real_
     )
 
-    xy <- matrix(NA_real_, N, 3)
-    xy[1, ] <- c(start_xy, init_heading)
+    ## Draw headings and compute proposed positions (all active sims at once)
+    mu    <- rwrpcauchy(n_act, phi, rho_i)
+    new_x <- px + sin(mu) * s_i
+    new_y <- py + cos(mu) * s_i
 
-    u <- v <- numeric(N)
-    early_stop <- FALSE
+    ## Batched FVCOM advection — 2 extract calls regardless of nsim
+    if (mpar$advect) {
+      k     <- layer_idx[i - 1L]
+      pos_m <- cbind(px, py)
 
-    ## -- N-step movement loop -------------------------------------------------
-    for (i in 2:N) {
-
-      ## Proposed position from swimming kernel (returns c(x, y, heading))
-      ds_i <- move_kernel(data, xy = xy[i - 1L, ], mpar = mpar,
-                          s = s_swim, i = i, end_xy = sim_end_xy)
-
-      ## FVCOM advection (skipped entirely when advect = FALSE)
-      if (mpar$advect) {
-        k <- layer_idx[i - 1L]
-
-        if (w == 0) {
-          tmp.u <- extract(data$u[[k]], rbind(xy[i - 1L, 1:2]),
-                           method = "simple")[1, 1] * advect_scale
-          tmp.v <- extract(data$v[[k]], rbind(xy[i - 1L, 1:2]),
-                           method = "simple")[1, 1] * advect_scale
-        } else {
-          tmp.u <- ((1 - w) * extract(data$u[[k]],      rbind(xy[i - 1L, 1:2]), method = "simple")[1, 1] +
-                          w  * extract(data$u[[k + 1L]], rbind(xy[i - 1L, 1:2]), method = "simple")[1, 1]) *
-                   advect_scale
-          tmp.v <- ((1 - w) * extract(data$v[[k]],      rbind(xy[i - 1L, 1:2]), method = "simple")[1, 1] +
-                          w  * extract(data$v[[k + 1L]], rbind(xy[i - 1L, 1:2]), method = "simple")[1, 1]) *
-                   advect_scale
-        }
-
-        ## Separate multipliers for ebb (u < 0) vs flood (u >= 0) phases
-        u[i] <- if (!is.na(tmp.u) && tmp.u < 0) tmp.u * mpar$uvm[1] else tmp.u * mpar$uvm[2]
-        v[i] <- if (!is.na(tmp.u) && tmp.u < 0) tmp.v * mpar$uvm[3] else tmp.v * mpar$uvm[4]
+      if (w == 0) {
+        u_raw <- terra::extract(data$u[[k]],      pos_m, method = "simple")[, 1]
+        v_raw <- terra::extract(data$v[[k]],      pos_m, method = "simple")[, 1]
+      } else {
+        u_raw <- ((1 - w) * terra::extract(data$u[[k]],        pos_m, method = "simple")[, 1] +
+                        w  * terra::extract(data$u[[k + 1L]],  pos_m, method = "simple")[, 1])
+        v_raw <- ((1 - w) * terra::extract(data$v[[k]],        pos_m, method = "simple")[, 1] +
+                        w  * terra::extract(data$v[[k + 1L]],  pos_m, method = "simple")[, 1])
       }
 
-      ## Combine swim displacement + advection; carry heading from kernel
-      xy[i, 1] <- ds_i[1] + u[i]
-      xy[i, 2] <- ds_i[2] + v[i]
-      xy[i, 3] <- ds_i[3]
+      u_adj <- ifelse(!is.na(u_raw) & u_raw < 0,
+                      u_raw * mpar$uvm[1], u_raw * mpar$uvm[2]) * advect_scale
+      v_adj <- ifelse(!is.na(u_raw) & u_raw < 0,
+                      v_raw * mpar$uvm[3], v_raw * mpar$uvm[4]) * advect_scale
+      u_adj[is.na(u_adj)] <- 0
+      v_adj[is.na(v_adj)] <- 0
 
-      ## Land / boundary checks.
-      ## The land check is skipped when data or data$land is NULL
-      ## (move_kernel already applies the same guard internally).
-      if (!is.null(data) && !is.null(data$land) &&
-          !is.na(extract(data$land, rbind(xy[i, 1:2]))[1, 1])) {
-        early_stop <- TRUE
-        break
-      }
-      if (any(is.na(xy[i, 1:2]))) {
-        early_stop <- TRUE
-        break
+      new_x         <- new_x + u_adj
+      new_y         <- new_y + v_adj
+      u_mat[act, i] <- u_adj
+      v_mat[act, i] <- v_adj
+    }
+
+    ## Land check — 1 batched extract; revert fish that landed on land
+    if (has_land) {
+      on_land <- !is.na(terra::extract(data$land, cbind(new_x, new_y))[, 1])
+      if (any(on_land)) {
+        new_x[on_land]          <- px[on_land]
+        new_y[on_land]          <- py[on_land]
+        mu[on_land]             <- ph[on_land]
+        u_mat[act[on_land], i]  <- 0
+        v_mat[act[on_land], i]  <- 0
       }
     }
 
-    ## -- End-constraint check -------------------------------------------------
-    if (early_stop || any(is.na(xy[N, 1:2]))) {
-      end_dist[sim_i] <- NA_real_
-      accepted[sim_i] <- FALSE
-    } else {
-      end_dist[sim_i] <- sqrt((xy[N, 1] - mpar$end[1])^2 +
-                               (xy[N, 2] - mpar$end[2])^2)
-      accepted[sim_i] <- end_dist[sim_i] <= mpar$det.range
+    ## NA check (raster boundary): mark simulation as stopped
+    is_na <- is.na(new_x) | is.na(new_y)
+    if (any(is_na)) {
+      early_stop_vec[act[is_na]] <- TRUE
+      active[act[is_na]]         <- FALSE
     }
 
-    ## -- Store track (trim to last valid row if simulation stopped early) ------
-    n_valid <- if (early_stop) max(which(!is.na(xy[, 1])), 0L) else N
+    ## Store updated positions for all active (non-NA) sims
+    still <- !is_na
+    xy_all[act[still], i, 1L] <- new_x[still]
+    xy_all[act[still], i, 2L] <- new_y[still]
+    xy_all[act[still], i, 3L] <- mu[still]
 
-    tracks[[sim_i]] <- tibble::tibble(
-      id   = sim_i,
-      date = seq(start.dt, by = step_secs, length.out = n_valid),
-      x    = xy[seq_len(n_valid), 1],
-      y    = xy[seq_len(n_valid), 2],
-      u    = u[seq_len(n_valid)],
-      v    = v[seq_len(n_valid)]
-    )
+    ## Detection check — record first entry within det.range of end receiver.
+    ## Simulations continue running to N steps after detection.
+    step_dists <- sqrt((new_x[still] - mpar$end[1])^2 +
+                       (new_y[still] - mpar$end[2])^2)
+    just_det <- !is.na(step_dists) & step_dists <= mpar$det.range &
+                !detected[act[still]]   ## only record first detection
+    if (any(just_det)) {
+      det_sims           <- act[still][just_det]
+      detected[det_sims] <- TRUE
+      det_step[det_sims] <- i
+      end_dist[det_sims] <- step_dists[just_det]
+      ## active[det_sims] is NOT set FALSE — simulations run to N
+    }
 
-    if (pb) setTxtProgressBar(tpb, sim_i)
+    if (pb) setTxtProgressBar(tpb, i)
   }
 
   if (pb) close(tpb)
 
+  ## ---- Final distance for simulations that ran to completion ---------------
+  completed <- !detected & !early_stop_vec
+  if (any(completed)) {
+    end_dist[completed] <- sqrt(
+      (xy_all[completed, N, 1L] - mpar$end[1])^2 +
+      (xy_all[completed, N, 2L] - mpar$end[2])^2
+    )
+  }
+  accepted <- detected
+
   n_accepted <- sum(accepted)
   message(sprintf("%d / %d simulations accepted (%.1f%%)",
                   n_accepted, nsim, 100 * n_accepted / nsim))
+
+  ## ---- Extract per-simulation tracks from xy_all ---------------------------
+  tracks <- vector("list", nsim)
+  for (sim_i in seq_len(nsim)) {
+    n_valid <- if (early_stop_vec[sim_i]) {
+      max(which(!is.na(xy_all[sim_i, , 1L])), 1L)
+    } else {
+      N
+    }
+
+    tracks[[sim_i]] <- tibble::tibble(
+      id   = sim_i,
+      date = date_seq[seq_len(n_valid)],
+      x    = xy_all[sim_i, seq_len(n_valid), 1L],
+      y    = xy_all[sim_i, seq_len(n_valid), 2L],
+      u    = u_mat[sim_i,  seq_len(n_valid)],
+      v    = v_mat[sim_i,  seq_len(n_valid)]
+    )
+  }
+
+  ## ---- Detection locations --------------------------------------------------
+  acc_idx  <- which(accepted)
+  det_locs <- if (length(acc_idx) > 0L) {
+    tibble::tibble(
+      id   = acc_idx,
+      x    = vapply(acc_idx, function(i) tracks[[i]]$x[   det_step[i]], numeric(1)),
+      y    = vapply(acc_idx, function(i) tracks[[i]]$y[   det_step[i]], numeric(1)),
+      date = do.call(c, lapply(acc_idx, function(i) tracks[[i]]$date[det_step[i]]))
+    )
+  } else {
+    tibble::tibble(id = integer(0), x = numeric(0), y = numeric(0),
+                  date = as.POSIXct(character(0), tz = "UTC"))
+  }
 
   ## ---- Output ----------------------------------------------------------------
   structure(
@@ -375,6 +503,8 @@ sim_fish <- function(
       sims            = tracks,
       accepted        = accepted,
       end_dist        = end_dist,
+      det_step        = det_step,
+      det_locs        = det_locs,
       n_accepted      = n_accepted,
       acceptance_rate = n_accepted / nsim,
       params          = mpar
@@ -404,11 +534,11 @@ print.sim_fish <- function(x, ...) {
   cat(sprintf("  end.dt:              %s\n", format(p$end.dt)))
   ed <- x$end_dist[!is.na(x$end_dist)]
   if (length(ed) > 0) {
-    cat(sprintf("  End distance (all):  mean %.3f km  (range %.3f – %.3f km)\n",
+    cat(sprintf("  End distance (all):  mean %.3f km  (range %.3f - %.3f km)\n",
                 mean(ed), min(ed), max(ed)))
     if (x$n_accepted > 0) {
       ea <- x$end_dist[x$accepted]
-      cat(sprintf("  End distance (acc):  mean %.3f km  (range %.3f – %.3f km)\n",
+      cat(sprintf("  End distance (acc):  mean %.3f km  (range %.3f - %.3f km)\n",
                   mean(ea), min(ea), max(ea)))
     }
   }

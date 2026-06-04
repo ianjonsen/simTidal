@@ -4,7 +4,7 @@
 \alias{sim_setup}
 \title{Pre-simulation setup}
 \usage{
-sim_setup(config = config, month = "July", year = "22")
+sim_setup(config = config, month = "July", year)
 }
 \arguments{
 \item{config}{- path to config.R script containing file.paths for required
@@ -12,12 +12,14 @@ sim_setup(config = config, month = "July", year = "22")
 
 \item{month}{- one or more month names matching the u/v subdirectories
 produced by \code{process_month()} in \code{create_envt.R}.
-Must be a subset of \code{c("May", "June", "July", "August")}.
-Multiple months are automatically sorted into calendar order.
-E.g. \code{"July"}, \code{c("July", "August")},
-or \code{c("May", "June", "July", "August")}.}
+Must be a subset of \code{c("April", "May", "June", "July", "Aug",
+"Sept")}. Multiple months are automatically sorted into calendar
+order. E.g. \code{"July"}, \code{c("July", "Aug")},
+or \code{c("April", "May", "June", "July", "Aug", "Sept")}.}
 
-\item{year}{- 2-digit year suffix, e.g. \code{"22"}}
+\item{year}{- 4-digit year as a character string, e.g. \code{"2025"}.
+Used to locate the year-level subdirectory in the FVCOM current data tree
+(\code{{fvcom}/u/{year}/{Month}/}).}
 }
 \description{
 load required rasters, receiver locations
@@ -30,8 +32,21 @@ Loads u and v as lazy file-backed SpatRasters built directly from
   or written. \code{terra::rast(file_vector)} reads only the specific tiles
   needed at each \code{extract()} call.
 
+  Current data are expected at
+  \code{{fvcom}/u/{year}/{Month}/u_{Month}DD.tif} (and the same under
+  \code{v/}), where \code{{fvcom}} is the root directory defined in
+  \code{config.R} and \code{year} is the 4-digit year passed to this
+  function. This layout supports multi-year data archives.
+
   \code{fvcom.origin} and \code{fvcom_step_secs} are derived from the first
   two u layer names so neither needs to be set manually in \code{mpar}.
+
+  \strong{Important:} the returned list contains \pkg{terra} SpatRasters
+  backed by C++ objects that do \emph{not} survive \code{saveRDS()} /
+  \code{readRDS()}. Always call \code{sim_setup()} fresh in the same R
+  session as \code{sim_fish()} or \code{sim_drifter()}. If you need to
+  cache the object use \code{terra::wrap()} before saving and
+  \code{terra::unwrap()} after loading.
 }
 \author{
 Ian Jonsen \email{jonsen@stochastic-qc.org}

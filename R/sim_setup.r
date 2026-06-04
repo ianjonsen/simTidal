@@ -8,11 +8,13 @@
 #'   & optional environmental layers (see Details)
 #' @param month - one or more month names matching the u/v subdirectories
 #'   produced by \code{process_month()} in \code{create_envt.R}.
-#'   Must be a subset of \code{c("May", "June", "July", "August")}.
-#'   Multiple months are automatically sorted into calendar order.
-#'   E.g. \code{"July"}, \code{c("July", "August")},
-#'   or \code{c("May", "June", "July", "August")}.
-#' @param year  - 2-digit year suffix, e.g. \code{"22"}
+#'   Must be a subset of \code{c("April", "May", "June", "July", "Aug",
+#'   "Sept")}. Multiple months are automatically sorted into calendar
+#'   order. E.g. \code{"July"}, \code{c("July", "Aug")},
+#'   or \code{c("April", "May", "June", "July", "Aug", "Sept")}.
+#' @param year  - 4-digit year as a character string, e.g. \code{"2025"}.
+#'   Used to locate the year-level subdirectory in the FVCOM current data tree
+#'   (\code{{fvcom}/u/{year}/{Month}/}).
 #'
 #' @details Loads u and v as lazy file-backed SpatRasters built directly from
 #'   the per-day files written by \code{process_month()}. When multiple months
@@ -21,17 +23,34 @@
 #'   or written. \code{terra::rast(file_vector)} reads only the specific tiles
 #'   needed at each \code{extract()} call.
 #'
+#'   Current data are expected at
+#'   \code{{fvcom}/u/{year}/{Month}/u_{Month}DD.tif} (and the same under
+#'   \code{v/}), where \code{{fvcom}} is the root directory defined in
+#'   \code{config.R} and \code{year} is the 4-digit year passed to this
+#'   function. This layout supports multi-year data archives.
+#'
 #'   \code{fvcom.origin} and \code{fvcom_step_secs} are derived from the first
 #'   two u layer names so neither needs to be set manually in \code{mpar}.
+#'
+#'   \strong{Important:} the returned list contains \pkg{terra} SpatRasters
+#'   backed by C++ objects that do \emph{not} survive \code{saveRDS()} /
+#'   \code{readRDS()}. Always call \code{sim_setup()} fresh in the same R
+#'   session as \code{sim_fish()} or \code{sim_drifter()}. If you need to
+#'   cache the object use \code{terra::wrap()} before saving and
+#'   \code{terra::unwrap()} after loading.
 #'
 #' @importFrom terra rast nlyr
 #' @export
 #'
 sim_setup <- function(config = config,
                       month  = "July",
-                      year   = "22") {
+                      year) {
 
-  valid_months <- c("May", "June", "July", "August")
+  if (missing(year) || !is.character(year) || length(year) != 1 ||
+      !grepl("^[0-9]{4}$", year))
+    stop("year must be a 4-digit character string, e.g. \"2025\"")
+
+  valid_months <- c("April", "May", "June", "July", "Aug", "Sept")
   month <- match.arg(month, choices = valid_months, several.ok = TRUE)
 
   ## Enforce calendar order regardless of how the user supplied the vector
@@ -56,12 +75,13 @@ sim_setup <- function(config = config,
   v_files <- character(0)
 
   for (m in month) {
-    u_dir <- file.path(fvcom, "u", m)
-    v_dir <- file.path(fvcom, "v", m)
+    u_dir <- file.path(fvcom, "u", year, m)
+    v_dir <- file.path(fvcom, "v", year, m)
 
     for (d in c(u_dir, v_dir))
       if (!dir.exists(d))
         stop("Directory not found: ", d,
+             "\n  Expected layout: {fvcom}/u/", year, "/", m, "/",
              "\n  Run process_month('", m, "', year = '", year,
              "') in create_envt.R first.")
 

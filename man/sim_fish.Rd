@@ -25,13 +25,20 @@ An object of class \code{sim_fish} with elements:
   \describe{
     \item{\code{sims}}{List of \code{n_sim} tibbles, each with columns
       \code{id}, \code{date}, \code{x}, \code{y}, \code{u}, \code{v}.
-      All simulations are returned, including rejected ones.}
+      Accepted tracks are truncated at the detection step; all others
+      run to step \code{N} (or the last valid step if stopped early).}
     \item{\code{accepted}}{Logical vector of length \code{n_sim};
-      \code{TRUE} when the simulation ended within \code{det.range}
-      of the end receiver.}
-    \item{\code{end_dist}}{Numeric vector (km) — distance from the
-      final simulated position to the end receiver, for each simulation.
-      \code{NA} for simulations that stopped early (land or boundary).}
+      \code{TRUE} when the simulation passed within \code{det.range}
+      of the end receiver at any step.}
+    \item{\code{end_dist}}{Numeric vector (km) — distance to the end
+      receiver at the detection step (accepted) or final step (rejected).
+      \code{NA} for simulations stopped early by a boundary condition.}
+    \item{\code{det_step}}{Integer vector — step index at which each
+      accepted simulation first entered \code{det.range}. \code{NA}
+      for rejected simulations.}
+    \item{\code{det_locs}}{Tibble with columns \code{id}, \code{x},
+      \code{y}, \code{date} — one row per accepted simulation giving
+      the position and time of detection.}
     \item{\code{n_accepted}}{Integer; number of accepted simulations.}
     \item{\code{acceptance_rate}}{Fraction of simulations accepted.}
     \item{\code{params}}{The \code{fish_par} object used.}
@@ -42,10 +49,9 @@ Runs an ensemble of \code{n_sim} fish movement simulations
   conditioned on two acoustic detection events (known times, uncertain
   locations). Each simulation:
   \enumerate{
-    \item Samples a start position uniformly within \code{det.range} of
-      the start receiver. For \code{move = "crw.bridge"}, an end
-      position is also sampled within \code{det.range} of the end
-      receiver.
+    \item Samples a start position (and, for \code{move = "crw.bridge"},
+      also an end position) uniformly within \code{det.range} of the
+      respective receiver.
     \item Propagates a movement model — with or without FVCOM tidal
       advection — for \code{N} steps, where \code{N} is derived
       automatically from the elapsed time between detections.
@@ -71,7 +77,7 @@ mpar <- fish_par(
 )
 
 ## With tidal advection (requires sim_setup() output)
-data <- sim_setup(config, month = c("June", "July"))
+data <- sim_setup(config, month = c("June", "July"), year = "2024")
 out  <- sim_fish(data, mpar)
 print(out)
 

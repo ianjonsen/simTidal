@@ -118,7 +118,8 @@ move_kernel <- function(data, xy = NULL, mpar, s, i, end_xy = NULL) {
 
     bcrw = {
       ## Biased correlated RW toward a fixed bearing.
-      phi <- mpar$bearing[i]
+      ## bearing may be a scalar or a step-indexed vector
+      phi <- if (length(mpar$bearing) == 1) mpar$bearing else mpar$bearing[i]
 
       ## rho may be a scalar or a step-indexed vector
       mu <- if (length(mpar$rho) == 1) {

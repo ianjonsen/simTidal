@@ -2,45 +2,87 @@
 % Please edit documentation in R/plot_sim.R
 \name{plot_sim}
 \alias{plot_sim}
-\title{Plot a simulated drifter or fish track on a bathymetric background}
+\title{Plot simulated drifter or fish tracks on a bathymetric background}
 \usage{
 plot_sim(
   x,
   data,
+  accepted_only = FALSE,
+  show.det = TRUE,
+  show.inset = TRUE,
   margin = 5,
   pt.size = 2.5,
   ln.col = "#E63946",
-  ln.size = 0.6,
+  ln.col.det = "#1D6FA4",
+  ln.size = 0.4,
+  ln.alpha = NULL,
+  ln.alpha.det = 1,
   bathy.col = c("#2a6496", "#d0e8f2"),
   bathy.alpha = 0.6
 )
 }
 \arguments{
-\item{x}{A \code{simTidal} object returned by \code{sim_drifter()}}
+\item{x}{A \code{simTidal} object returned by
+\code{sim_drifter()}, or a \code{sim_fish} object returned by
+\code{sim_fish()}.}
 
-\item{data}{The data list from \code{sim_setup()}, used to access the
-\code{bathy} and \code{land} SpatRasters}
+\item{data}{The data list from \code{sim_setup()}, used to access
+the \code{bathy} and \code{land} SpatRasters.}
 
-\item{margin}{Margin added around the track extent in km (default 5)}
+\item{accepted_only}{Logical; for \code{sim_fish} objects only. If
+\code{FALSE} (default), all tracks are drawn in \code{ln.col} with
+detected tracks overlaid in \code{ln.col.det}. If \code{TRUE}, only
+detected tracks are shown. Ignored for drifter objects.}
 
-\item{pt.size}{Size of the start/end point markers (default 2.5)}
+\item{show.det}{Logical; for \code{sim_fish} objects only. If
+\code{TRUE} (default), a small marker is placed at the detection
+location of each accepted track. Ignored for drifter objects.}
 
-\item{ln.col}{Colour of the track line (default \code{"#E63946"})}
+\item{show.inset}{Logical; for \code{sim_fish} objects with at least one
+accepted simulation. If \code{TRUE} (default), a compact ECDF inset is
+placed in the lower-right corner showing detection times as a fraction
+of total transit steps (\code{det_step / N}). Ignored for drifter objects.}
 
-\item{ln.size}{Line width of the track (default 0.6)}
+\item{margin}{Margin added around the track extent in km (default 5).}
 
-\item{bathy.col}{Two-element character vector giving the low and high colours
-for the bathymetry fill scale (default a muted blue range)}
+\item{pt.size}{Size of the start/end receiver point markers (default
+2.5). Detection markers are scaled to \code{pt.size * 0.65}.}
 
-\item{bathy.alpha}{Alpha transparency for the bathymetry layer (default 0.6)}
+\item{ln.col}{Colour of all tracks (background layer) and receiver
+markers (default \code{"#E63946"}, red).}
+
+\item{ln.col.det}{Colour of detected (accepted) tracks and detection
+markers (default \code{"#1D6FA4"}, blue). Ignored for drifter objects.}
+
+\item{ln.size}{Line width (default 0.6).}
+
+\item{ln.alpha}{Alpha transparency for the background (all-tracks) layer.
+Default \code{NULL} sets it automatically: 0.5 for fish ensembles, 1 for
+a single drifter track.}
+
+\item{ln.alpha.det}{Alpha transparency for the detected (blue) track layer
+(default 1). Ignored for drifter objects.}
+
+\item{bathy.col}{Two-element character vector giving the low and high
+colours for the bathymetry fill scale (default a muted blue range).}
+
+\item{bathy.alpha}{Alpha transparency for the bathymetry layer (default
+0.6).}
 }
 \value{
 A \code{ggplot} object that can be further modified or saved with
-  \code{ggsave()}
+  \code{ggsave()}.
 }
 \description{
-Renders a \code{simTidal} object as a ggplot2 map. Bathymetry
-  is shown as a muted fill behind the land mask, with the simulated track
-  overlaid. The map extent is automatically fitted to the track with a
-  small configurable margin.
+Renders a \code{simTidal} or \code{sim_fish} object as a
+  ggplot2 map. Bathymetry is shown as a muted fill behind the land mask,
+  with the simulated track(s) overlaid. The map extent is automatically
+  fitted to the track(s) with a small configurable margin.
+
+  For \code{sim_fish} objects, all tracks are drawn in \code{ln.col} as a
+  background layer, with detected (accepted) tracks overlaid in
+  \code{ln.col.det}. Detection locations are annotated as small markers
+  when \code{show.det = TRUE}. An inset ECDF showing the distribution of
+  detection times (as a fraction of the total transit \code{N}) is added
+  to the lower-right corner when \code{show.inset = TRUE}.
 }
