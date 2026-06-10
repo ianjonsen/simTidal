@@ -10,11 +10,18 @@ plot_sim(
   accepted_only = FALSE,
   show.det = TRUE,
   show.inset = TRUE,
+  show.real.det = TRUE,
+  show.arrows = TRUE,
+  mpp = "median",
+  mpp.sims = "accepted",
+  mpp.col = "white",
+  mpp.lwd = 1,
+  tidal.period = 12.4,
   margin = 5,
   pt.size = 2.5,
-  ln.col = "#E63946",
-  ln.col.det = "#1D6FA4",
-  ln.size = 0.4,
+  ln.col = "firebrick",
+  ln.col.det = "dodgerblue",
+  ln.size = 0.6,
   ln.alpha = NULL,
   ln.alpha.det = 1,
   bathy.col = c("#2a6496", "#d0e8f2"),
@@ -34,43 +41,48 @@ the \code{bathy} and \code{land} SpatRasters.}
 detected tracks overlaid in \code{ln.col.det}. If \code{TRUE}, only
 detected tracks are shown. Ignored for drifter objects.}
 
-\item{show.det}{Logical; for \code{sim_fish} objects only. If
-\code{TRUE} (default), a small marker is placed at the detection
-location of each accepted track. Ignored for drifter objects.}
+\item{show.det}{Logical; if \code{TRUE} (default), a small marker is
+placed at the detection location of each accepted track.}
 
-\item{show.inset}{Logical; for \code{sim_fish} objects with at least one
-accepted simulation. If \code{TRUE} (default), a compact ECDF inset is
-placed in the lower-right corner showing detection times as a fraction
-of total transit steps (\code{det_step / N}). Ignored for drifter objects.}
+\item{show.inset}{Logical; if \code{TRUE} (default), a ECDF panel is
+placed below the map showing the distribution of detection times.}
+
+\item{show.arrows}{Logical; if \code{TRUE} (default), direction-of-travel
+arrows are added at 1/3 and 2/3 along each simulated track, coloured to
+match the track layer. Ignored for drifter objects.}
+
+\item{tidal.period}{Tidal period in hours used to annotate the ECDF panel
+with a secondary x-axis and cycle-boundary lines. Default \code{12.4}
+(M2 semi-diurnal). Set to \code{NULL} to disable tidal cycle annotation.}
 
 \item{margin}{Margin added around the track extent in km (default 5).}
 
 \item{pt.size}{Size of the start/end receiver point markers (default
-2.5). Detection markers are scaled to \code{pt.size * 0.65}.}
+2.5). Detection markers are scaled to \code{pt.size * 0.65}, track
+endpoints to \code{pt.size * 0.35}.}
 
 \item{ln.col}{Colour of all tracks (background layer) and receiver
 markers (default \code{"#E63946"}, red).}
 
 \item{ln.col.det}{Colour of detected (accepted) tracks and detection
-markers (default \code{"#1D6FA4"}, blue). Ignored for drifter objects.}
+markers (default \code{"#1D6FA4"}, blue).}
 
 \item{ln.size}{Line width (default 0.6).}
 
-\item{ln.alpha}{Alpha transparency for the background (all-tracks) layer.
-Default \code{NULL} sets it automatically: 0.5 for fish ensembles, 1 for
-a single drifter track.}
+\item{ln.alpha}{Alpha transparency for the background track layer.
+Default \code{NULL} auto-sets to 0.5 for fish, 1 for drifter.}
 
-\item{ln.alpha.det}{Alpha transparency for the detected (blue) track layer
-(default 1). Ignored for drifter objects.}
+\item{ln.alpha.det}{Alpha transparency for the detected track layer
+(default 1).}
 
-\item{bathy.col}{Two-element character vector giving the low and high
-colours for the bathymetry fill scale (default a muted blue range).}
+\item{bathy.col}{Two-element character vector for the bathymetry fill
+scale (default muted blue range).}
 
 \item{bathy.alpha}{Alpha transparency for the bathymetry layer (default
 0.6).}
 }
 \value{
-A \code{ggplot} object that can be further modified or saved with
+A \code{ggplot} or \code{patchwork} object saveable with
   \code{ggsave()}.
 }
 \description{
@@ -81,8 +93,10 @@ Renders a \code{simTidal} or \code{sim_fish} object as a
 
   For \code{sim_fish} objects, all tracks are drawn in \code{ln.col} as a
   background layer, with detected (accepted) tracks overlaid in
-  \code{ln.col.det}. Detection locations are annotated as small markers
-  when \code{show.det = TRUE}. An inset ECDF showing the distribution of
-  detection times (as a fraction of the total transit \code{N}) is added
-  to the lower-right corner when \code{show.inset = TRUE}.
+  \code{ln.col.det}. Direction-of-travel arrows are added at 1/3 and 2/3
+  of each track when \code{show.arrows = TRUE}. Detection locations are
+  annotated as small markers when \code{show.det = TRUE}. A separate ECDF
+  panel below the map shows the distribution of detection times; when
+  \code{tidal.period} is set, a secondary x-axis and cycle-boundary lines
+  show how many tidal cycles the simulated transit covered.
 }
