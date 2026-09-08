@@ -4,7 +4,7 @@
 \alias{sim_setup}
 \title{Pre-simulation setup}
 \usage{
-sim_setup(config = config, month = "July", year)
+sim_setup(config = config, month = "July", year, axis.tol = 0.5)
 }
 \arguments{
 \item{config}{- path to config.R script containing file.paths for required
@@ -24,6 +24,14 @@ sim_setup(config = config, month = "July", year)
 \item{year}{- 4-digit year as a character string, e.g. \code{"2025"}.
 Used to locate the year-level subdirectory in the FVCOM current data tree
 (\code{{fvcom}/u/{year}/{Month}/}).}
+
+\item{axis.tol}{- tolerance for the FVCOM time-axis check, as a fraction of
+one step. Layer \code{k} must sit within \code{axis.tol * step} of
+\code{origin + k * step}, otherwise \code{sim_fish()}'s arithmetic layer
+lookup would select the wrong layer. Default 0.5 (half a step), which is
+exactly the point at which rounding would pick a neighbour. Label jitter
+from float32 time storage is typically ~0.3 of a step and passes; a missing
+day-file is off by 144 steps and does not.}
 }
 \description{
 load required rasters, receiver locations

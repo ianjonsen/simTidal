@@ -16,6 +16,13 @@
 #'   Note these are the exact directory names \code{process_month()} writes,
 #'   not \code{month.abb} or \code{month.name}: "April" not "Apr", "Sept"
 #'   not "Sep", "Aug" not "August".
+#' @param axis.tol - tolerance for the FVCOM time-axis check, as a fraction of
+#'   one step. Layer \code{k} must sit within \code{axis.tol * step} of
+#'   \code{origin + k * step}, otherwise \code{sim_fish()}'s arithmetic layer
+#'   lookup would select the wrong layer. Default 0.5 (half a step), which is
+#'   exactly the point at which rounding would pick a neighbour. Label jitter
+#'   from float32 time storage is typically ~0.3 of a step and passes; a missing
+#'   day-file is off by 144 steps and does not.
 #' @param year  - 4-digit year as a character string, e.g. \code{"2025"}.
 #'   Used to locate the year-level subdirectory in the FVCOM current data tree
 #'   (\code{{fvcom}/u/{year}/{Month}/}).
@@ -48,7 +55,8 @@
 #'
 sim_setup <- function(config = config,
                       month  = "July",
-                      year) {
+                      year,
+                      axis.tol = 0.5) {
 
   if (missing(year) || !is.character(year) || length(year) != 1 ||
       !grepl("^[0-9]{4}$", year))
@@ -106,14 +114,14 @@ sim_setup <- function(config = config,
   out[["u"]] <- suppressWarnings(rast(u_files))
   out[["v"]] <- suppressWarnings(rast(v_files))
 
-  ## Derive fvcom.origin and step interval from the first two u layer names
-  ## (encoded as "ua_YYYYMMDDTHHMMz"). Stored in data so sim_drifter() and
+  ## Derive fvcom.origin and fvcom_step_secs from the u layer names (encoded as
+  ## "ua_YYYYMMDDTHHMMz"). Stored in data so sim_fish(), sim_drifter() and
   ## validate_mpar() never need to read layer names themselves.
-  stopifnot("Need at least 2 u layers to derive fvcom_step_secs" =
-              terra::nlyr(out[["u"]]) >= 2L)
+  stopifnot("Need at least 3 u layers to fit a time axis" =
+              terra::nlyr(out[["u"]]) >= 3L)
 
   parse_lyr_time <- function(nm)
-    as.POSIXct(sub("^ua_", "", nm), format = "%Y%m%dT%H%Mz", tz = "UTC")
+    as.POSIXct(sub("^[uv]a_", "", nm), format = "%Y%m%dT%H%Mz", tz = "UTC")
 
   u_names <- terra::names(out[["u"]])
   u_times <- parse_lyr_time(u_names)
@@ -123,39 +131,85 @@ sim_setup <- function(config = config,
          " u layer name(s), e.g. '", u_names[which(is.na(u_times))[1]], "'.\n",
          "  Expected the form 'ua_YYYYMMDDTHHMMz' written by process_month().")
 
-  out[["fvcom.origin"]]    <- u_times[1]
-  out[["fvcom_step_secs"]] <- as.numeric(difftime(u_times[2], u_times[1],
-                                                  units = "secs"))
+  n_lyr <- length(u_times)
+  k     <- seq_len(n_lyr) - 1L
 
-  ## ---- Assert a regular time axis -------------------------------------------
+  ## ---- Fit the time axis, rather than reading it off two adjacent layers ----
   ##
-  ## sim_fish() and sim_drifter() locate the FVCOM layer for a given time
-  ## arithmetically, as round((t - fvcom.origin) / fvcom_step_secs). That is
-  ## only correct if layer position tracks wall-clock time exactly. A missing
-  ## day-file, or a day-file with the wrong number of layers, breaks the
-  ## mapping for every step after it and advects by the wrong tidal phase with
-  ## no error raised. Two such gaps have already occurred (May 2024, Aug 2019),
-  ## so this is checked rather than assumed.
+  ## FVCOM records time as days since 1858-11-17 (MJD). Where that variable is
+  ## stored as NC_FLOAT, the 24-bit mantissa quantises modern dates — MJD is
+  ## around 60,000, so the representable spacing is 2^-8 d = 5.625 min. A clean
+  ## 10-min output axis is therefore *labelled* with timestamps that jitter by
+  ## up to +/- 2.8 min, giving minute-steps of 11, 6, 11, 11, 11, 6, 11, 12, ...
+  ## in a 9-step cycle. The layers themselves are exactly 10 min apart; only
+  ## their labels are not.
+  ##
+  ## Deriving the step from the first two labels therefore returns 11 min for a
+  ## 10-min dataset. Fit the axis across the whole stack instead: the endpoints
+  ## carry bounded quantisation error, so the mean step recovers the true
+  ## interval to within a fraction of a second over thousands of layers.
 
-  d_secs <- as.numeric(diff(u_times), units = "secs")
-  bad    <- which(d_secs != out[["fvcom_step_secs"]])
+  step_raw  <- as.numeric(difftime(u_times[n_lyr], u_times[1L], units = "secs")) /
+               (n_lyr - 1L)
+  step_secs <- round(step_raw / 60) * 60      ## FVCOM intervals are whole minutes
 
-  if (length(bad)) {
-    gap1 <- bad[1]
-    stop("FVCOM time axis is not evenly spaced — layer indexing would be wrong.\n",
-         "  Expected a constant ", out[["fvcom_step_secs"]] / 60, "-min step.\n",
-         "  First break: layer ", gap1, " (", format(u_times[gap1]), ") -> layer ",
-         gap1 + 1L, " (", format(u_times[gap1 + 1L]), "), gap = ",
-         round(d_secs[gap1] / 3600, 2), " h.\n",
-         "  ", length(bad), " break(s) in total across ", length(u_times), " layers.\n",
-         "  Re-run process_month() for the affected month(s) in create_envt.R.")
+  if (step_secs <= 0)
+    stop("Could not determine the FVCOM step interval: fitted ",
+         round(step_raw, 1), " s across ", n_lyr, " layers.\n",
+         "  Are the day-files sorted correctly?")
+
+  ## Intercept that centres the residuals, rounded to the nearest whole minute
+  ## (the true axis sits on whole minutes; only the labels do not).
+  origin_num <- mean(as.numeric(u_times) - k * step_secs)
+  origin     <- as.POSIXct(round(origin_num / 60) * 60,
+                           origin = "1970-01-01", tz = "UTC")
+
+  out[["fvcom.origin"]]    <- origin
+  out[["fvcom_step_secs"]] <- step_secs
+  out[["u_times"]]         <- u_times   ## the labels as written, for diagnostics
+
+  ## ---- Verify the assumption sim_fish() actually makes ----------------------
+  ##
+  ## sim_fish() and sim_drifter() locate a layer as
+  ## round((t - fvcom.origin) / fvcom_step_secs). What that needs is not that
+  ## consecutive labels differ by a constant, but that layer k sits close enough
+  ## to origin + k * step for the rounding to pick the right layer. Label jitter
+  ## of a few minutes is harmless; a missing day-file displaces everything after
+  ## it by a full day (144 steps at 10 min) and is caught immediately. A day
+  ## file with 143 or 145 layers shows up the same way.
+
+  dev   <- as.numeric(u_times) - (as.numeric(origin) + k * step_secs)   ## seconds
+  tol   <- axis.tol * step_secs
+  worst <- which.max(abs(dev))
+
+  if (abs(dev[worst]) >= tol) {
+    first_bad <- which(abs(dev) >= tol)[1]
+    stop("FVCOM layer ", first_bad, " is not where its index places it — ",
+         "layer indexing would be wrong.\n",
+         "  Fitted axis: origin ", format(origin), ", step ", step_secs / 60,
+         " min, ", n_lyr, " layers.\n",
+         "  Layer ", first_bad, " is labelled ", format(u_times[first_bad]),
+         " but index ", first_bad, " places it at ",
+         format(origin + (first_bad - 1L) * step_secs), " (off by ",
+         round(dev[first_bad] / 60, 1), " min; tolerance +/- ",
+         round(tol / 60, 1), " min).\n",
+         "  ", sum(abs(dev) >= tol), " of ", n_lyr, " layers are out of place.\n",
+         "  This is what a missing or short day-file looks like. Check the day ",
+         "files for the month(s) around that date and re-run process_month().")
   }
 
-  ## v must carry the same time axis as u
+  if (max(abs(dev)) > 60)
+    message(sprintf(
+      paste0("  note: layer labels jitter by up to %.1f min around a clean %g-min axis\n",
+             "        (float32 MJD precision in the FVCOM time variable; harmless —\n",
+             "        the layers are regularly spaced, only their labels are not)."),
+      max(abs(dev)) / 60, step_secs / 60))
+
+  ## v must carry the same labels as u
   v_times <- parse_lyr_time(terra::names(out[["v"]]))
-  if (length(v_times) != length(u_times) || !all(v_times == u_times))
-    stop("u and v time axes differ (", length(u_times), " vs ", length(v_times),
-         " layers). Re-run process_month() for the affected month(s).")
+  if (anyNA(v_times) || length(v_times) != n_lyr || !all(v_times == u_times))
+    stop("u and v time axes differ (", n_lyr, " u layers vs ", length(v_times),
+         " v layers). Re-run process_month() for the affected month(s).")
 
   out[["month"]] <- month   ## character vector, calendar-ordered
   out[["year"]]  <- year
