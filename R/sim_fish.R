@@ -181,7 +181,7 @@ sim_fish <- function(
   start.dt     <- mpar$start.dt
   advect_scale <- step_secs / 1000   ## m/s -> km/step
   layer_idx    <- NULL
-  is_flood     <- NULL               ## tidal phase flag: TRUE = flood (u < 0 at start)
+  is_flood     <- FALSE              ## tidal phase: set from u at start location & time
   w            <- 0L
 
   if (mpar$advect) {
@@ -248,18 +248,14 @@ sim_fish <- function(
     ))
     layer_idx <- seq_len(N - 1L) + fvcom.idx
 
-    ## Pre-compute tidal phase (flood vs ebb) at the start receiver location for
-    ## every simulation step. Using a fixed reference point in the main tidal
-    ## channel avoids noisy per-fish phase signals near land or raster edges.
-    ## is_flood[j] corresponds to loop step i = j + 1 (i.e. layer_idx[j]).
-    ref_pos    <- matrix(mpar$start, nrow = 1L)
-    needed_k   <- sort(unique(layer_idx))
-    u_at_k     <- vapply(needed_k,
-      function(k) terra::extract(data$u[[k]], ref_pos, method = "simple")[1L, 1L],
-      numeric(1L))
-    names(u_at_k) <- as.character(needed_k)
-    u_ref      <- u_at_k[as.character(layer_idx)]
-    is_flood   <- !is.na(u_ref) & u_ref < 0   ## TRUE = flood (u into Bay of Fundy)
+    ## Determine tidal phase (flood vs ebb) once at the simulation start time.
+    ## u is extracted at the start receiver location using the first step's FVCOM
+    ## layer; this single scalar governs uvm selection for the entire simulation.
+    ## flood = u < 0 at start (flow into Bay of Fundy); ebb = u >= 0.
+    ref_pos  <- matrix(mpar$start, nrow = 1L)
+    u_start  <- terra::extract(data$u[[layer_idx[1L]]], ref_pos,
+                               method = "simple")[1L, 1L]
+    is_flood <- !is.na(u_start) && u_start < 0
 
     if (mpar$interp && w > 0 && max(layer_idx) >= n_u_layers)
       stop("Simulation timeframe requires layer ", max(layer_idx) + 1L,
@@ -412,7 +408,7 @@ sim_fish <- function(
     ## Batched FVCOM advection — 2 extract calls regardless of nsim
     if (mpar$advect) {
       k       <- layer_idx[i - 1L]
-      flood_i <- is_flood[i - 1L]   ## tidal phase for this step (from start-location ref)
+      flood_i <- is_flood            ## scalar: determined once at simulation start time
       pos_m   <- cbind(px, py)
 
       if (w == 0) {

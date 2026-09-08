@@ -163,6 +163,15 @@ sim_drifter <- function(
          " but data$u only has ", n_u_layers, " layers.\n",
          "  Reduce N or re-run sim_setup() with additional months.")
 
+  ## Determine tidal phase once at simulation start time from u at start location.
+  is_flood <- if (mpar$advect) {
+    ref_pos <- matrix(mpar$start, nrow = 1L)
+    u0      <- extract(data$u[[layer_idx[1L]]], ref_pos, method = "simple")[1L, 1L]
+    !is.na(u0) && u0 < 0
+  } else {
+    FALSE
+  }
+
   ## ---- Main loop -----------------------------------------------------------
 
   for (i in 2:N) {
@@ -172,26 +181,24 @@ sim_drifter <- function(
 
     if (mpar$advect) {
       k <- layer_idx[i - 1L]
-      ## uvm convention: c(u.flood, v.flood, u.ebb, v.ebb)
+      ## uvm convention: c(u.flood, v.flood, u.ebb, v.ebb); is_flood set before loop
       if (w == 0) {
-        tmp.u     <- extract(data$u[[k]], rbind(xy[i - 1, ]),
-                             method = "simple")[1, 1] * advect_scale
-        tmp.v[i]  <- extract(data$v[[k]], rbind(xy[i - 1, ]),
-                             method = "simple")[1, 1] * advect_scale
-        flood_i   <- !is.na(tmp.u) && tmp.u < 0
-        u[i] <- tmp.u    * if (flood_i) mpar$uvm[1] else mpar$uvm[3]
-        v[i] <- tmp.v[i] * if (flood_i) mpar$uvm[2] else mpar$uvm[4]
+        tmp.u    <- extract(data$u[[k]], rbind(xy[i - 1, ]),
+                            method = "simple")[1, 1] * advect_scale
+        tmp.v[i] <- extract(data$v[[k]], rbind(xy[i - 1, ]),
+                            method = "simple")[1, 1] * advect_scale
+        u[i] <- tmp.u    * if (is_flood) mpar$uvm[1] else mpar$uvm[3]
+        v[i] <- tmp.v[i] * if (is_flood) mpar$uvm[2] else mpar$uvm[4]
 
       } else {
-        tmp.u     <- ((1 - w) * extract(data$u[[k]],      rbind(xy[i - 1, ]), method = "simple")[1, 1] +
-                            w  * extract(data$u[[k + 1L]], rbind(xy[i - 1, ]), method = "simple")[1, 1]) *
-                     advect_scale
-        tmp.v[i]  <- ((1 - w) * extract(data$v[[k]],      rbind(xy[i - 1, ]), method = "simple")[1, 1] +
-                            w  * extract(data$v[[k + 1L]], rbind(xy[i - 1, ]), method = "simple")[1, 1]) *
-                     advect_scale
-        flood_i   <- !is.na(tmp.u) && tmp.u < 0
-        u[i] <- tmp.u    * if (flood_i) mpar$uvm[1] else mpar$uvm[3]
-        v[i] <- tmp.v[i] * if (flood_i) mpar$uvm[2] else mpar$uvm[4]
+        tmp.u    <- ((1 - w) * extract(data$u[[k]],      rbind(xy[i - 1, ]), method = "simple")[1, 1] +
+                           w  * extract(data$u[[k + 1L]], rbind(xy[i - 1, ]), method = "simple")[1, 1]) *
+                    advect_scale
+        tmp.v[i] <- ((1 - w) * extract(data$v[[k]],      rbind(xy[i - 1, ]), method = "simple")[1, 1] +
+                           w  * extract(data$v[[k + 1L]], rbind(xy[i - 1, ]), method = "simple")[1, 1]) *
+                    advect_scale
+        u[i] <- tmp.u    * if (is_flood) mpar$uvm[1] else mpar$uvm[3]
+        v[i] <- tmp.v[i] * if (is_flood) mpar$uvm[2] else mpar$uvm[4]
       }
     }
 
