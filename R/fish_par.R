@@ -73,6 +73,13 @@
 ##' @param interp    Logical; if \code{TRUE}, linearly interpolate u and v
 ##'   between the two FVCOM layers bracketing \code{start.dt} (2 extracts
 ##'   per step). Default \code{FALSE} (snap to nearest layer).
+##' @param seed      Optional integer RNG seed. When supplied,
+##'   \code{sim_fish()} sets it before drawing any random numbers and
+##'   restores the caller's RNG state on exit, so a simulation is exactly
+##'   reproducible and independent of the order in which passages are run.
+##'   \code{NULL} (default) leaves the RNG stream alone. For batch runs set
+##'   this deterministically from the passage key (fish_id, pe pair) rather
+##'   than from a counter, so a single passage can be re-run in isolation.
 ##' @param method    Simulation method. \code{"rejection"} (default): accept
 ##'   simulations whose final position falls within \code{det.range} of
 ##'   \code{end}. Future option \code{"bridge"} will add a temporal
@@ -114,6 +121,7 @@ fish_par <- function(
     uvm       = c(1, 1),
     advect    = TRUE,
     interp    = FALSE,
+    seed      = NULL,
     method    = "rejection"
 ) {
 
@@ -184,6 +192,8 @@ fish_par <- function(
   if (!is.logical(interp) || length(interp) != 1)
     stop("interp must be TRUE or FALSE")
 
+  seed <- .check_seed(seed)
+
   ## ---- Derive N from detection times -----------------------------------------
   step_secs <- time.step * 60
   N <- as.integer(round(
@@ -227,6 +237,7 @@ fish_par <- function(
       uvm       = uvm,
       advect    = advect,
       interp    = interp,
+      seed      = seed,
       land      = FALSE,
       boundary  = FALSE
     ),
@@ -251,6 +262,8 @@ print.fish_par <- function(x, ...) {
   cat(sprintf("  start:     x = %.3f km,  y = %.3f km\n", x$start[1], x$start[2]))
   cat(sprintf("  end:       x = %.3f km,  y = %.3f km\n", x$end[1],   x$end[2]))
   cat(sprintf("  det.range: %.3f km\n", x$det.range))
+  cat(sprintf("  seed:      %s\n",
+              if (is.null(x$seed)) "none (not reproducible)" else format(x$seed)))
   cat(sprintf("  move:      %s\n", x$move))
   if (x$move == "crw") {
     cat("  (no directional bias — heading self-correlated via rho)\n")

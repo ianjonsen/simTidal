@@ -11,11 +11,15 @@ sim_setup(config = config, month = "July", year)
 & optional environmental layers (see Details)}
 
 \item{month}{- one or more month names matching the u/v subdirectories
-produced by \code{process_month()} in \code{create_envt.R}.
-Must be a subset of \code{c("April", "May", "June", "July", "Aug",
-"Sept")}. Multiple months are automatically sorted into calendar
-order. E.g. \code{"July"}, \code{c("July", "Aug")},
-or \code{c("April", "May", "June", "July", "Aug", "Sept")}.}
+  produced by \code{process_month()} in \code{create_envt.R}.
+  Must be a subset of \code{c("Jan", "Feb", "Mar", "April", "May",
+  "June", "July", "Aug", "Sept", "Oct", "Nov", "Dec")}. Multiple months
+  are automatically sorted into calendar order. E.g. \code{"July"},
+  \code{c("July", "Aug")}, or \code{c("Nov", "Dec")}.
+
+  Note these are the exact directory names \code{process_month()} writes,
+  not \code{month.abb} or \code{month.name}: "April" not "Apr", "Sept"
+  not "Sep", "Aug" not "August".}
 
 \item{year}{- 4-digit year as a character string, e.g. \code{"2025"}.
 Used to locate the year-level subdirectory in the FVCOM current data tree

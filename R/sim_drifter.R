@@ -46,6 +46,24 @@ sim_drifter <- function(
 
   validate_mpar(mpar, data)
 
+  ## ---- RNG seed -------------------------------------------------------------
+  ##
+  ## When mpar$seed is set, the track is exactly reproducible. The caller's RNG
+  ## stream is restored on exit so a batch of drifter runs gives the same result
+  ## per run regardless of dispatch order, and so seeding one simulation does
+  ## not silently reseed whatever the caller does next. This matters most for
+  ## the uvm calibration, where the same drifter is re-run across a parameter
+  ## grid and the differences must come from uvm, not from the RNG.
+  if (!is.null(mpar$seed)) {
+    if (exists(".Random.seed", envir = globalenv(), inherits = FALSE)) {
+      .old_seed <- get(".Random.seed", envir = globalenv())
+      on.exit(assign(".Random.seed", .old_seed, envir = globalenv()), add = TRUE)
+    } else {
+      on.exit(suppressWarnings(rm(".Random.seed", envir = globalenv())), add = TRUE)
+    }
+    set.seed(mpar$seed)
+  }
+
   N         <- mpar$N
   step_secs <- mpar$time.step * 60L
 

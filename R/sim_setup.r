@@ -8,10 +8,14 @@
 #'   & optional environmental layers (see Details)
 #' @param month - one or more month names matching the u/v subdirectories
 #'   produced by \code{process_month()} in \code{create_envt.R}.
-#'   Must be a subset of \code{c("April", "May", "June", "July", "Aug",
-#'   "Sept")}. Multiple months are automatically sorted into calendar
-#'   order. E.g. \code{"July"}, \code{c("July", "Aug")},
-#'   or \code{c("April", "May", "June", "July", "Aug", "Sept")}.
+#'   Must be a subset of \code{c("Jan", "Feb", "Mar", "April", "May",
+#'   "June", "July", "Aug", "Sept", "Oct", "Nov", "Dec")}. Multiple months
+#'   are automatically sorted into calendar order. E.g. \code{"July"},
+#'   \code{c("July", "Aug")}, or \code{c("Nov", "Dec")}.
+#'
+#'   Note these are the exact directory names \code{process_month()} writes,
+#'   not \code{month.abb} or \code{month.name}: "April" not "Apr", "Sept"
+#'   not "Sep", "Aug" not "August".
 #' @param year  - 4-digit year as a character string, e.g. \code{"2025"}.
 #'   Used to locate the year-level subdirectory in the FVCOM current data tree
 #'   (\code{{fvcom}/u/{year}/{Month}/}).
@@ -50,7 +54,8 @@ sim_setup <- function(config = config,
       !grepl("^[0-9]{4}$", year))
     stop("year must be a 4-digit character string, e.g. \"2025\"")
 
-  valid_months <- c("April", "May", "June", "July", "Aug", "Sept")
+  valid_months <- c("Jan", "Feb", "Mar", "April", "May", "June",
+                    "July", "Aug", "Sept", "Oct", "Nov", "Dec")
   month <- match.arg(month, choices = valid_months, several.ok = TRUE)
 
   ## Enforce calendar order regardless of how the user supplied the vector
@@ -111,11 +116,46 @@ sim_setup <- function(config = config,
     as.POSIXct(sub("^ua_", "", nm), format = "%Y%m%dT%H%Mz", tz = "UTC")
 
   u_names <- terra::names(out[["u"]])
-  out[["fvcom.origin"]]    <- parse_lyr_time(u_names[1])
-  out[["fvcom_step_secs"]] <- as.numeric(
-    difftime(parse_lyr_time(u_names[2]),
-             parse_lyr_time(u_names[1]), units = "secs")
-  )
+  u_times <- parse_lyr_time(u_names)
+
+  if (anyNA(u_times))
+    stop("Could not parse timestamps from ", sum(is.na(u_times)),
+         " u layer name(s), e.g. '", u_names[which(is.na(u_times))[1]], "'.\n",
+         "  Expected the form 'ua_YYYYMMDDTHHMMz' written by process_month().")
+
+  out[["fvcom.origin"]]    <- u_times[1]
+  out[["fvcom_step_secs"]] <- as.numeric(difftime(u_times[2], u_times[1],
+                                                  units = "secs"))
+
+  ## ---- Assert a regular time axis -------------------------------------------
+  ##
+  ## sim_fish() and sim_drifter() locate the FVCOM layer for a given time
+  ## arithmetically, as round((t - fvcom.origin) / fvcom_step_secs). That is
+  ## only correct if layer position tracks wall-clock time exactly. A missing
+  ## day-file, or a day-file with the wrong number of layers, breaks the
+  ## mapping for every step after it and advects by the wrong tidal phase with
+  ## no error raised. Two such gaps have already occurred (May 2024, Aug 2019),
+  ## so this is checked rather than assumed.
+
+  d_secs <- as.numeric(diff(u_times), units = "secs")
+  bad    <- which(d_secs != out[["fvcom_step_secs"]])
+
+  if (length(bad)) {
+    gap1 <- bad[1]
+    stop("FVCOM time axis is not evenly spaced — layer indexing would be wrong.\n",
+         "  Expected a constant ", out[["fvcom_step_secs"]] / 60, "-min step.\n",
+         "  First break: layer ", gap1, " (", format(u_times[gap1]), ") -> layer ",
+         gap1 + 1L, " (", format(u_times[gap1 + 1L]), "), gap = ",
+         round(d_secs[gap1] / 3600, 2), " h.\n",
+         "  ", length(bad), " break(s) in total across ", length(u_times), " layers.\n",
+         "  Re-run process_month() for the affected month(s) in create_envt.R.")
+  }
+
+  ## v must carry the same time axis as u
+  v_times <- parse_lyr_time(terra::names(out[["v"]]))
+  if (length(v_times) != length(u_times) || !all(v_times == u_times))
+    stop("u and v time axes differ (", length(u_times), " vs ", length(v_times),
+         " layers). Re-run process_month() for the affected month(s).")
 
   out[["month"]] <- month   ## character vector, calendar-ordered
   out[["year"]]  <- year

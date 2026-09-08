@@ -25,6 +25,7 @@ fish_par(
   uvm = c(1, 1),
   advect = TRUE,
   interp = FALSE,
+  seed = NULL,
   method = "rejection"
 )
 }
@@ -112,6 +113,14 @@ multipliers for negative and positive \code{u} current. Default
 \item{interp}{Logical; if \code{TRUE}, linearly interpolate u and v
 between the two FVCOM layers bracketing \code{start.dt} (2 extracts
 per step). Default \code{FALSE} (snap to nearest layer).}
+
+\item{seed}{Optional integer RNG seed. When supplied,
+\code{sim_fish()} sets it before drawing any random numbers and
+restores the caller's RNG state on exit, so a simulation is exactly
+reproducible and independent of the order in which passages are run.
+\code{NULL} (default) leaves the RNG stream alone. For batch runs set
+this deterministically from the passage key (fish_id, pe pair) rather
+than from a counter, so a single passage can be re-run in isolation.}
 
 \item{method}{Simulation method. \code{"rejection"} (default): accept
 simulations whose final position falls within \code{det.range} of

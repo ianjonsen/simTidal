@@ -49,6 +49,13 @@
          "  e.g. c(-0.15, -0.15). More negative = stronger land avoidance.")
 }
 
+.check_seed <- function(x, name = "seed") {
+  if (is.null(x)) return(invisible(NULL))
+  if (!is.numeric(x) || length(x) != 1 || is.na(x) || x != as.integer(x))
+    stop(name, " must be NULL or a single integer")
+  invisible(as.integer(x))
+}
+
 .check_uvm <- function(x) {
   if (!is.numeric(x) || !length(x) %in% c(1L, 2L, 4L))
     stop("uvm must be a numeric scalar, 2-element vector, or 4-element vector")
@@ -58,7 +65,8 @@
 
 ## Shared land/advection fields validated and returned by all constructors
 .common_fields <- function(time.step, start.dt, start,
-                            beta, buffer, uvm, advect, noise, interp) {
+                            beta, buffer, uvm, advect, noise, interp,
+                            seed = NULL) {
   if (!is.numeric(time.step) || length(time.step) != 1 || time.step <= 0)
     stop("time.step must be a positive number (minutes), e.g. 10")
   if (!is.null(start.dt)) .check_posixct(start.dt, "start.dt")
@@ -73,6 +81,7 @@
     stop("noise must be NULL or a non-negative number (sd in km)")
   if (!is.logical(interp) || length(interp) != 1)
     stop("interp must be TRUE or FALSE")
+  seed <- .check_seed(seed)
 
   list(
     time.step = time.step,
@@ -84,6 +93,7 @@
     advect    = advect,
     noise     = noise,
     interp    = interp,
+    seed      = seed,
     land      = FALSE,
     boundary  = FALSE
   )
@@ -113,6 +123,11 @@
 ##' @param uvm        Current multiplier: scalar or c(u_mult, v_mult).
 ##'                   Default \code{c(1, 1)} = unmodified FVCOM currents
 ##' @param advect     Logical; advect by FVCOM currents (default \code{TRUE})
+##' @param seed       Optional integer RNG seed. When supplied,
+##'   \code{sim_drifter()} sets it before drawing any random numbers and
+##'   restores the caller's RNG state on exit, so a simulation is exactly
+##'   reproducible and independent of the order in which runs are dispatched.
+##'   \code{NULL} (default) leaves the RNG stream alone.
 ##' @param interp     Logical; if \code{TRUE}, linearly interpolate u and v
 ##'                   between the two FVCOM layers bracketing \code{start.dt}
 ##'                   (2 extracts per step). If \code{FALSE} (default), snap
@@ -140,12 +155,13 @@ drifter_par <- function(
     buffer    = 1,
     uvm       = c(1, 1),
     advect    = TRUE,
-    interp    = FALSE
+    interp    = FALSE,
+    seed      = NULL
 ) {
   .check_positive_int(N, "N")
 
   common <- .common_fields(time.step, start.dt, start,
-                            beta, buffer, uvm, advect, noise, interp)
+                            beta, buffer, uvm, advect, noise, interp, seed)
 
   structure(
     c(list(N = N, move = "drifter"), common),
@@ -179,6 +195,11 @@ drifter_par <- function(
 ##' @param buffer     Water-search radius (km) when grounded
 ##' @param uvm        Current multiplier: scalar or c(u_mult, v_mult)
 ##' @param advect     Logical; advect by FVCOM currents (default \code{TRUE})
+##' @param seed       Optional integer RNG seed. When supplied,
+##'   \code{sim_drifter()} sets it before drawing any random numbers and
+##'   restores the caller's RNG state on exit, so a simulation is exactly
+##'   reproducible and independent of the order in which runs are dispatched.
+##'   \code{NULL} (default) leaves the RNG stream alone.
 ##' @param interp     Logical; if \code{TRUE}, linearly interpolate u and v
 ##'                   between the two FVCOM layers bracketing \code{start.dt}.
 ##'                   Default \code{FALSE}.
@@ -200,7 +221,8 @@ bcrw_par <- function(
     buffer    = 1,
     uvm       = c(1, 1),
     advect    = TRUE,
-    interp    = FALSE
+    interp    = FALSE,
+    seed      = NULL
 ) {
   .check_positive_int(N, "N")
 
@@ -222,7 +244,7 @@ bcrw_par <- function(
     stop("fl must be a positive scalar (fork length in metres)")
 
   common <- .common_fields(time.step, start.dt, start,
-                            beta, buffer, uvm, advect, noise, interp)
+                            beta, buffer, uvm, advect, noise, interp, seed)
 
   structure(
     c(list(N = N, move = "bcrw",
@@ -258,6 +280,11 @@ bcrw_par <- function(
 ##' @param buffer     Water-search radius (km) when grounded
 ##' @param uvm        Current multiplier: scalar or c(u_mult, v_mult)
 ##' @param advect     Logical; advect by FVCOM currents (default \code{TRUE})
+##' @param seed       Optional integer RNG seed. When supplied,
+##'   \code{sim_drifter()} sets it before drawing any random numbers and
+##'   restores the caller's RNG state on exit, so a simulation is exactly
+##'   reproducible and independent of the order in which runs are dispatched.
+##'   \code{NULL} (default) leaves the RNG stream alone.
 ##' @param interp     Logical; if \code{TRUE}, linearly interpolate u and v
 ##'                   between the two FVCOM layers bracketing \code{start.dt}.
 ##'                   Default \code{FALSE}.
@@ -281,7 +308,8 @@ bcrw_coa_par <- function(
     buffer    = 1,
     uvm       = c(1, 1),
     advect    = TRUE,
-    interp    = FALSE
+    interp    = FALSE,
+    seed      = NULL
 ) {
   .check_positive_int(N, "N")
 
@@ -304,7 +332,7 @@ bcrw_coa_par <- function(
     stop("fl must be a positive scalar (fork length in metres)")
 
   common <- .common_fields(time.step, start.dt, start,
-                            beta, buffer, uvm, advect, noise, interp)
+                            beta, buffer, uvm, advect, noise, interp, seed)
 
   structure(
     c(list(N = N, move = "bcrw.coa",
@@ -331,6 +359,8 @@ print.drifter_par <- function(x, ...) {
   if (!is.null(x$noise))
     cat(sprintf("  noise sd:  %.4f km\n", x$noise))
   cat(sprintf("  uvm:       c(%.2f, %.2f)\n", x$uvm[1], x$uvm[2]))
+  cat(sprintf("  seed:      %s\n",
+              if (is.null(x$seed)) "none (not reproducible)" else format(x$seed)))
   cat(sprintf("  beta:      c(%.3f, %.3f)  buffer: %.2f km\n",
               x$beta[1], x$beta[2], x$buffer))
   invisible(x)
@@ -353,6 +383,8 @@ print.bcrw_par <- function(x, ...) {
               x$fl))
   cat(sprintf("  advect:    %s    uvm: c(%.2f, %.2f)    interp: %s\n",
               x$advect, x$uvm[1], x$uvm[2], x$interp))
+  cat(sprintf("  seed:      %s\n",
+              if (is.null(x$seed)) "none (not reproducible)" else format(x$seed)))
   cat(sprintf("  beta:      c(%.3f, %.3f)  buffer: %.2f km\n",
               x$beta[1], x$beta[2], x$buffer))
   invisible(x)
@@ -371,6 +403,8 @@ print.bcrw_coa_par <- function(x, ...) {
               x$rho, x$bl, x$fl))
   cat(sprintf("  advect:    %s    uvm: c(%.2f, %.2f)    interp: %s\n",
               x$advect, x$uvm[1], x$uvm[2], x$interp))
+  cat(sprintf("  seed:      %s\n",
+              if (is.null(x$seed)) "none (not reproducible)" else format(x$seed)))
   cat(sprintf("  beta:      c(%.3f, %.3f)  buffer: %.2f km\n",
               x$beta[1], x$beta[2], x$buffer))
   invisible(x)

@@ -20,7 +20,8 @@ bcrw_coa_par(
   buffer = 1,
   uvm = c(1, 1),
   advect = TRUE,
-  interp = FALSE
+  interp = FALSE,
+  seed = NULL
 )
 }
 \arguments{
@@ -60,6 +61,12 @@ bcrw_coa_par(
 \item{interp}{Logical; if \code{TRUE}, linearly interpolate u and v
 between the two FVCOM layers bracketing \code{start.dt}.
 Default \code{FALSE}.}
+
+\item{seed}{Optional integer RNG seed. When supplied,
+\code{sim_drifter()} sets it before drawing any random numbers and
+restores the caller's RNG state on exit, so a simulation is exactly
+reproducible and independent of the order in which runs are dispatched.
+\code{NULL} (default) leaves the RNG stream alone.}
 }
 \value{
 Object of class \code{c("bcrw_coa_par", "mpar")}

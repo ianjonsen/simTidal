@@ -56,7 +56,6 @@ mdct <- function(obs, sim, trim = TRUE, smooth_obs = NULL) {
     stop("obs$date must be POSIXct")
   if (!inherits(sim$date, "POSIXct"))
     stop("sim$date must be POSIXct")
-browser()
   ## ---- Optional: trim obs to simulation window -----------------------------
   if (trim) {
     obs <- obs[obs$date >= min(sim$date) & obs$date <= max(sim$date), ]

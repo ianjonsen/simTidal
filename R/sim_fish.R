@@ -156,6 +156,23 @@ sim_fish <- function(
     rm(.nm, .r, .ok)
   }
 
+  ## ---- RNG seed -------------------------------------------------------------
+  ##
+  ## When mpar$seed is set, the ensemble is exactly reproducible. The caller's
+  ## RNG stream is restored on exit so that running a batch of passages gives
+  ## the same result for each passage regardless of the order they are run in,
+  ## and so that seeding one simulation does not silently reseed whatever the
+  ## caller does next.
+  if (!is.null(mpar$seed)) {
+    if (exists(".Random.seed", envir = globalenv(), inherits = FALSE)) {
+      .old_seed <- get(".Random.seed", envir = globalenv())
+      on.exit(assign(".Random.seed", .old_seed, envir = globalenv()), add = TRUE)
+    } else {
+      on.exit(suppressWarnings(rm(".Random.seed", envir = globalenv())), add = TRUE)
+    }
+    set.seed(mpar$seed)
+  }
+
   step_secs <- mpar$time.step * 60L
   N    <- mpar$N
   nsim <- mpar$n_sim
@@ -528,6 +545,8 @@ print.sim_fish <- function(x, ...) {
   cat(sprintf("  Accepted:            %d  (%.1f%%)\n",
               x$n_accepted, 100 * x$acceptance_rate))
   cat(sprintf("  Detection range:     %.3f km\n", p$det.range))
+  cat(sprintf("  Seed:                %s\n",
+              if (is.null(p$seed)) "none (not reproducible)" else format(p$seed)))
   cat(sprintf("  N steps:             %d  (%.1f hours at %g-min intervals)\n",
               p$N, p$N * p$time.step / 60, p$time.step))
   cat(sprintf("  start.dt:            %s\n", format(p$start.dt)))

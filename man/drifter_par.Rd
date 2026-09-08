@@ -14,7 +14,8 @@ drifter_par(
   buffer = 1,
   uvm = c(1, 1),
   advect = TRUE,
-  interp = FALSE
+  interp = FALSE,
+  seed = NULL
 )
 }
 \arguments{
@@ -48,6 +49,12 @@ between the two FVCOM layers bracketing \code{start.dt}
 (2 extracts per step). If \code{FALSE} (default), snap
 \code{start.dt} to the nearest layer boundary and use
 a single extract per step.}
+
+\item{seed}{Optional integer RNG seed. When supplied,
+\code{sim_drifter()} sets it before drawing any random numbers and
+restores the caller's RNG state on exit, so a simulation is exactly
+reproducible and independent of the order in which runs are dispatched.
+\code{NULL} (default) leaves the RNG stream alone.}
 }
 \value{
 Object of class \code{c("drifter_par", "mpar")}

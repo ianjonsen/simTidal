@@ -139,7 +139,14 @@ read_pe <- function(events, stations, tz = "UTC") {
 ##'   Must correspond to a later timestamp than \code{pe_start}.
 ##' @param ...      Additional arguments forwarded to \code{\link{fish_par}}
 ##'   (e.g. \code{n_sim}, \code{move}, \code{bearing}, \code{rho},
-##'   \code{bl}, \code{fl}, \code{det.range}, \code{advect}).
+##'   \code{bl}, \code{fl}, \code{det.range}, \code{advect}, \code{seed}).
+##'
+##'   \code{seed} needs no special handling here — it is forwarded like any
+##'   other \code{fish_par()} argument. For a batch run, derive it
+##'   deterministically from the passage key so a passage always draws the same
+##'   ensemble and can be re-run in isolation, e.g.
+##'   \code{seed = as.integer(paste0(fish_id, pe_start, pe_end))} or a hash of
+##'   the same three values.
 ##'
 ##' @return Object of class \code{c("fish_par", "mpar")} from
 ##'   \code{\link{fish_par}}.
@@ -154,7 +161,8 @@ read_pe <- function(events, stations, tz = "UTC") {
 ##'                          bearing = pi,   ## southward bias
 ##'                          rho     = 0.6,
 ##'                          bl      = 2.0,
-##'                          fl      = 0.80)
+##'                          fl      = 0.80,
+##'                          seed    = 60102)   ## fish 6, pe 1 -> 2
 ##' out <- sim_fish(data, mpar)
 ##' }
 ##'
