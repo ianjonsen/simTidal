@@ -181,6 +181,7 @@ sim_fish <- function(
   start.dt     <- mpar$start.dt
   advect_scale <- step_secs / 1000   ## m/s -> km/step
   layer_idx    <- NULL
+  is_flood     <- NULL               ## tidal phase flag: TRUE = flood (u < 0 at start)
   w            <- 0L
 
   if (mpar$advect) {
@@ -246,6 +247,19 @@ sim_fish <- function(
       as.numeric(difftime(start.dt, fvcom.origin, units = "secs")) / step_secs
     ))
     layer_idx <- seq_len(N - 1L) + fvcom.idx
+
+    ## Pre-compute tidal phase (flood vs ebb) at the start receiver location for
+    ## every simulation step. Using a fixed reference point in the main tidal
+    ## channel avoids noisy per-fish phase signals near land or raster edges.
+    ## is_flood[j] corresponds to loop step i = j + 1 (i.e. layer_idx[j]).
+    ref_pos    <- matrix(mpar$start, nrow = 1L)
+    needed_k   <- sort(unique(layer_idx))
+    u_at_k     <- vapply(needed_k,
+      function(k) terra::extract(data$u[[k]], ref_pos, method = "simple")[1L, 1L],
+      numeric(1L))
+    names(u_at_k) <- as.character(needed_k)
+    u_ref      <- u_at_k[as.character(layer_idx)]
+    is_flood   <- !is.na(u_ref) & u_ref < 0   ## TRUE = flood (u into Bay of Fundy)
 
     if (mpar$interp && w > 0 && max(layer_idx) >= n_u_layers)
       stop("Simulation timeframe requires layer ", max(layer_idx) + 1L,
@@ -397,8 +411,9 @@ sim_fish <- function(
 
     ## Batched FVCOM advection — 2 extract calls regardless of nsim
     if (mpar$advect) {
-      k     <- layer_idx[i - 1L]
-      pos_m <- cbind(px, py)
+      k       <- layer_idx[i - 1L]
+      flood_i <- is_flood[i - 1L]   ## tidal phase for this step (from start-location ref)
+      pos_m   <- cbind(px, py)
 
       if (w == 0) {
         u_raw <- terra::extract(data$u[[k]],      pos_m, method = "simple")[, 1]
@@ -410,13 +425,13 @@ sim_fish <- function(
                         w  * terra::extract(data$v[[k + 1L]],  pos_m, method = "simple")[, 1])
       }
 
-      u_adj <- ifelse(!is.na(u_raw) & u_raw < 0,
-                      u_raw * mpar$uvm[1], u_raw * mpar$uvm[2]) * advect_scale
-      v_adj <- ifelse(!is.na(u_raw) & u_raw < 0,
-                      v_raw * mpar$uvm[3], v_raw * mpar$uvm[4]) * advect_scale
-      u_adj[is.na(u_adj)] <- 0
-      v_adj[is.na(v_adj)] <- 0
-
+      ## uvm convention: c(u.flood, v.flood, u.ebb, v.ebb)
+      u_adj <- ifelse(!is.na(u_raw),
+                      u_raw * if (flood_i) mpar$uvm[1] else mpar$uvm[3],
+                      0) * advect_scale
+      v_adj <- ifelse(!is.na(v_raw),
+                      v_raw * if (flood_i) mpar$uvm[2] else mpar$uvm[4],
+                      0) * advect_scale
       new_x         <- new_x + u_adj
       new_y         <- new_y + v_adj
       u_mat[act, i] <- u_adj

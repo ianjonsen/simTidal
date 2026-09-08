@@ -54,7 +54,9 @@ bcrw_coa_par(
 
 \item{buffer}{Water-search radius (km) when grounded}
 
-\item{uvm}{Current multiplier: scalar or c(u_mult, v_mult)}
+\item{uvm}{Current velocity multiplier. Scalar, 2-element
+\code{c(u, v)}, or 4-element \code{c(u.flood, v.flood, u.ebb, v.ebb)}.
+See \code{?fish_par} for full details of the phase-dependent form.}
 
 \item{advect}{Logical; advect by FVCOM currents (default \code{TRUE})}
 

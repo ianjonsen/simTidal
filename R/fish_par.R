@@ -65,10 +65,25 @@
 ##'   More negative = stronger repulsion. Default \code{c(-0.15, -0.15)}.
 ##' @param buffer    Water-search radius (km) when fish grounds on land.
 ##'   Default 1.
-##' @param uvm       Current multiplier. Scalar, 2-element \code{c(u, v)},
-##'   or 4-element \code{c(u_neg, u_pos, v_neg, v_pos)} applying separate
-##'   multipliers for negative and positive \code{u} current. Default
-##'   \code{c(1, 1)}.
+##' @param uvm       Current velocity multiplier applied during advection.
+##'   Controls how raw FVCOM u and v components are rescaled before being
+##'   added to each simulated position.
+##'   \itemize{
+##'     \item \strong{Scalar} \code{uvm = a}: all u and v values are
+##'       multiplied by \code{a}, regardless of tidal phase.
+##'     \item \strong{2-element} \code{c(u, v)}: u is multiplied by
+##'       \code{uvm[1]} and v by \code{uvm[2]}, the same in both flood
+##'       and ebb. Useful when u and v systematic biases differ but are
+##'       phase-invariant.
+##'     \item \strong{4-element} \code{c(u.flood, v.flood, u.ebb, v.ebb)}:
+##'       separate multipliers for each component in each tidal phase.
+##'       Tidal phase at each step is determined by the sign of the u
+##'       current extracted at the start receiver location:
+##'       \code{u < 0} = flood (flow into the Bay of Fundy);
+##'       \code{u >= 0} = ebb. This is the recommended form when
+##'       calibrations show phase-dependent bias in the FVCOM currents.
+##'   }
+##'   Default \code{c(1, 1)} (no rescaling).
 ##' @param advect    Logical; advect by FVCOM currents. Default \code{TRUE}.
 ##' @param interp    Logical; if \code{TRUE}, linearly interpolate u and v
 ##'   between the two FVCOM layers bracketing \code{start.dt} (2 extracts
@@ -204,10 +219,10 @@ fish_par <- function(
          "  span = ", format(round(as.numeric(difftime(end.dt, start.dt, units = "mins")), 1)),
          " min,  time.step = ", time.step, " min")
 
-  ## Expand uvm to 4-element form (u_neg, u_pos, v_neg, v_pos)
+  ## Expand uvm to canonical 4-element form: c(u.flood, v.flood, u.ebb, v.ebb)
   uvm <- switch(as.character(length(uvm)),
-    "1" = rep(uvm, 4),
-    "2" = c(uvm[1], uvm[1], uvm[2], uvm[2]),
+    "1" = rep(uvm, 4L),
+    "2" = c(uvm[1], uvm[2], uvm[1], uvm[2]),
     "4" = uvm,
     stop("uvm must have 1, 2, or 4 elements")
   )
@@ -279,8 +294,11 @@ print.fish_par <- function(x, ...) {
   }
   cat(sprintf("  rho:       %.3f   bl: %.2f BL/s   fl: %.3f m\n",
               x$rho, x$bl, x$fl))
-  cat(sprintf("  advect:    %s    uvm: c(%.2f, %.2f, %.2f, %.2f)    interp: %s\n",
-              x$advect, x$uvm[1], x$uvm[2], x$uvm[3], x$uvm[4], x$interp))
+  cat(sprintf("  advect:    %s    uvm: flood c(%.2f, %.2f)  ebb c(%.2f, %.2f)    interp: %s\n",
+              x$advect,
+              x$uvm[1], x$uvm[2],   ## u.flood, v.flood
+              x$uvm[3], x$uvm[4],   ## u.ebb,   v.ebb
+              x$interp))
   cat(sprintf("  beta:      c(%.3f, %.3f)   buffer: %.2f km\n",
               x$beta[1], x$beta[2], x$buffer))
   invisible(x)

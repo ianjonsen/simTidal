@@ -103,10 +103,25 @@ More negative = stronger repulsion. Default \code{c(-0.15, -0.15)}.}
 \item{buffer}{Water-search radius (km) when fish grounds on land.
 Default 1.}
 
-\item{uvm}{Current multiplier. Scalar, 2-element \code{c(u, v)},
-or 4-element \code{c(u_neg, u_pos, v_neg, v_pos)} applying separate
-multipliers for negative and positive \code{u} current. Default
-\code{c(1, 1)}.}
+\item{uvm}{Current velocity multiplier applied during advection.
+Controls how raw FVCOM u and v components are rescaled before being
+added to each simulated position.
+\itemize{
+  \item \strong{Scalar} \code{uvm = a}: all u and v values are
+    multiplied by \code{a}, regardless of tidal phase.
+  \item \strong{2-element} \code{c(u, v)}: u is multiplied by
+    \code{uvm[1]} and v by \code{uvm[2]}, the same in both flood
+    and ebb. Useful when u and v systematic biases differ but are
+    phase-invariant.
+  \item \strong{4-element} \code{c(u.flood, v.flood, u.ebb, v.ebb)}:
+    separate multipliers for each component in each tidal phase.
+    Tidal phase at each step is determined by the sign of the u
+    current extracted at the start receiver location:
+    \code{u < 0} = flood (flow into the Bay of Fundy);
+    \code{u >= 0} = ebb. This is the recommended form when
+    calibrations show phase-dependent bias in the FVCOM currents.
+}
+Default \code{c(1, 1)} (no rescaling).}
 
 \item{advect}{Logical; advect by FVCOM currents. Default \code{TRUE}.}
 

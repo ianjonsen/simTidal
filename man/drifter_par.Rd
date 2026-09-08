@@ -39,8 +39,10 @@ Default \code{c(-0.15, -0.15)}}
 
 \item{buffer}{Search radius (km) for water when drifter grounds on land}
 
-\item{uvm}{Current multiplier: scalar or c(u_mult, v_mult).
-Default \code{c(1, 1)} = unmodified FVCOM currents}
+\item{uvm}{Current velocity multiplier. Scalar, 2-element
+\code{c(u, v)}, or 4-element \code{c(u.flood, v.flood, u.ebb, v.ebb)}.
+See \code{?fish_par} for full details of the phase-dependent form.
+Default \code{c(1, 1)} = unmodified FVCOM currents.}
 
 \item{advect}{Logical; advect by FVCOM currents (default \code{TRUE})}
 

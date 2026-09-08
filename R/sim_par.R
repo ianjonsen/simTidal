@@ -89,7 +89,10 @@
     start     = start,
     beta      = beta,
     buffer    = buffer,
-    uvm       = if (length(uvm) == 1) c(uvm, uvm) else uvm,
+    uvm       = switch(as.character(length(uvm)),
+                  "1" = rep(uvm, 4L),
+                  "2" = c(uvm[1], uvm[2], uvm[1], uvm[2]),
+                  uvm),
     advect    = advect,
     noise     = noise,
     interp    = interp,
@@ -120,8 +123,10 @@
 ##'                   More negative = stronger repulsion from land.
 ##'                   Default \code{c(-0.15, -0.15)}
 ##' @param buffer     Search radius (km) for water when drifter grounds on land
-##' @param uvm        Current multiplier: scalar or c(u_mult, v_mult).
-##'                   Default \code{c(1, 1)} = unmodified FVCOM currents
+##' @param uvm        Current velocity multiplier. Scalar, 2-element
+##'   \code{c(u, v)}, or 4-element \code{c(u.flood, v.flood, u.ebb, v.ebb)}.
+##'   See \code{?fish_par} for full details of the phase-dependent form.
+##'   Default \code{c(1, 1)} = unmodified FVCOM currents.
 ##' @param advect     Logical; advect by FVCOM currents (default \code{TRUE})
 ##' @param seed       Optional integer RNG seed. When supplied,
 ##'   \code{sim_drifter()} sets it before drawing any random numbers and
@@ -193,7 +198,9 @@ drifter_par <- function(
 ##' @param noise      Optional positional noise sd in km. \code{NULL} = off
 ##' @param beta       Land-avoidance coefficients, both <= 0
 ##' @param buffer     Water-search radius (km) when grounded
-##' @param uvm        Current multiplier: scalar or c(u_mult, v_mult)
+##' @param uvm        Current velocity multiplier. Scalar, 2-element
+##'   \code{c(u, v)}, or 4-element \code{c(u.flood, v.flood, u.ebb, v.ebb)}.
+##'   See \code{?fish_par} for full details of the phase-dependent form.
 ##' @param advect     Logical; advect by FVCOM currents (default \code{TRUE})
 ##' @param seed       Optional integer RNG seed. When supplied,
 ##'   \code{sim_drifter()} sets it before drawing any random numbers and
@@ -278,7 +285,9 @@ bcrw_par <- function(
 ##' @param noise      Optional positional noise sd in km. \code{NULL} = off
 ##' @param beta       Land-avoidance coefficients, both <= 0
 ##' @param buffer     Water-search radius (km) when grounded
-##' @param uvm        Current multiplier: scalar or c(u_mult, v_mult)
+##' @param uvm        Current velocity multiplier. Scalar, 2-element
+##'   \code{c(u, v)}, or 4-element \code{c(u.flood, v.flood, u.ebb, v.ebb)}.
+##'   See \code{?fish_par} for full details of the phase-dependent form.
 ##' @param advect     Logical; advect by FVCOM currents (default \code{TRUE})
 ##' @param seed       Optional integer RNG seed. When supplied,
 ##'   \code{sim_drifter()} sets it before drawing any random numbers and
@@ -358,7 +367,8 @@ print.drifter_par <- function(x, ...) {
   cat(sprintf("  advect:    %s    interp: %s\n", x$advect, x$interp))
   if (!is.null(x$noise))
     cat(sprintf("  noise sd:  %.4f km\n", x$noise))
-  cat(sprintf("  uvm:       c(%.2f, %.2f)\n", x$uvm[1], x$uvm[2]))
+  cat(sprintf("  uvm:       flood c(%.2f, %.2f)  ebb c(%.2f, %.2f)\n",
+              x$uvm[1], x$uvm[2], x$uvm[3], x$uvm[4]))
   cat(sprintf("  seed:      %s\n",
               if (is.null(x$seed)) "none (not reproducible)" else format(x$seed)))
   cat(sprintf("  beta:      c(%.3f, %.3f)  buffer: %.2f km\n",
@@ -381,8 +391,8 @@ print.bcrw_par <- function(x, ...) {
               if (length(x$bl) == 1) sprintf("%.2f", x$bl)
               else sprintf("vector [length %d]", length(x$bl)),
               x$fl))
-  cat(sprintf("  advect:    %s    uvm: c(%.2f, %.2f)    interp: %s\n",
-              x$advect, x$uvm[1], x$uvm[2], x$interp))
+  cat(sprintf("  advect:    %s    uvm: flood c(%.2f, %.2f)  ebb c(%.2f, %.2f)    interp: %s\n",
+              x$advect, x$uvm[1], x$uvm[2], x$uvm[3], x$uvm[4], x$interp))
   cat(sprintf("  seed:      %s\n",
               if (is.null(x$seed)) "none (not reproducible)" else format(x$seed)))
   cat(sprintf("  beta:      c(%.3f, %.3f)  buffer: %.2f km\n",
@@ -401,8 +411,8 @@ print.bcrw_coa_par <- function(x, ...) {
               nrow(x$coa), x$coa.tol, x$nu))
   cat(sprintf("  rho:       %.3f   bl: %.2f BL/s   fl: %.3f m\n",
               x$rho, x$bl, x$fl))
-  cat(sprintf("  advect:    %s    uvm: c(%.2f, %.2f)    interp: %s\n",
-              x$advect, x$uvm[1], x$uvm[2], x$interp))
+  cat(sprintf("  advect:    %s    uvm: flood c(%.2f, %.2f)  ebb c(%.2f, %.2f)    interp: %s\n",
+              x$advect, x$uvm[1], x$uvm[2], x$uvm[3], x$uvm[4], x$interp))
   cat(sprintf("  seed:      %s\n",
               if (is.null(x$seed)) "none (not reproducible)" else format(x$seed)))
   cat(sprintf("  beta:      c(%.3f, %.3f)  buffer: %.2f km\n",
