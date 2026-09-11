@@ -24,6 +24,7 @@ fish_par(
   buffer = 1,
   uvm = c(1, 1),
   advect = TRUE,
+  phase = c("track", "step"),
   interp = FALSE,
   seed = NULL,
   method = "rejection"
@@ -115,15 +116,24 @@ added to each simulated position.
     phase-invariant.
   \item \strong{4-element} \code{c(u.flood, v.flood, u.ebb, v.ebb)}:
     separate multipliers for each component in each tidal phase.
-    Tidal phase at each step is determined by the sign of the u
-    current extracted at the start receiver location:
-    \code{u < 0} = flood (flow into the Bay of Fundy);
-    \code{u >= 0} = ebb. This is the recommended form when
-    calibrations show phase-dependent bias in the FVCOM currents.
+    Tidal phase is determined once, from the sign of the u current
+    extracted at the start receiver location:
+    \code{u > 0} = flood, eastward flow filling Minas Basin;
+    \code{u <= 0} = ebb, westward flow out toward the Bay of Fundy.
+    This is the recommended form when calibrations show
+    phase-dependent bias in the FVCOM currents.
 }
 Default \code{c(1, 1)} (no rescaling).}
 
 \item{advect}{Logical; advect by FVCOM currents. Default \code{TRUE}.}
+
+\item{phase}{How often the flood/ebb decision that selects the
+\code{uvm} pair is made. \code{"track"} (default) decides once at
+\code{start.dt} from u at the start receiver and holds it for the whole
+simulation. \code{"step"} decides afresh at every step from u at each
+simulation's own position, which is more nearly correct for passages
+spanning a slack but changes what \code{uvm} means: values calibrated
+under \code{"track"} absorbed that assumption and should be refitted.}
 
 \item{interp}{Logical; if \code{TRUE}, linearly interpolate u and v
 between the two FVCOM layers bracketing \code{start.dt} (2 extracts

@@ -251,11 +251,23 @@ sim_fish <- function(
     ## Determine tidal phase (flood vs ebb) once at the simulation start time.
     ## u is extracted at the start receiver location using the first step's FVCOM
     ## layer; this single scalar governs uvm selection for the entire simulation.
-    ## flood = u < 0 at start (flow into Bay of Fundy); ebb = u >= 0.
+    ##
+    ## FLOOD = u > 0: water flowing EASTWARD through Minas Passage, filling
+    ## Minas Basin. EBB = u <= 0: water flowing westward, out toward the Bay of
+    ## Fundy.
+    ##
+    ## This test used to read u < 0 and was described as "flood = flow into the
+    ## Bay of Fundy", which is self-contradictory: flow into the Bay of Fundy is
+    ## the ebb. The consequence was that uvm[1:2], the pair named for the flood,
+    ## was applied to westward flow and uvm[3:4] to eastward -- the multipliers
+    ## were swapped on every run. The raster data agree with the corrected
+    ## reading: at FORCE007 on 11 May 2022 eastward flow peaks at 2.75 m/s
+    ## against 2.09 m/s westward, and a shorter, stronger flood is what a
+    ## convergent macrotidal basin should show.
     ref_pos  <- matrix(mpar$start, nrow = 1L)
     u_start  <- terra::extract(data$u[[layer_idx[1L]]], ref_pos,
                                method = "simple")[1L, 1L]
-    is_flood <- !is.na(u_start) && u_start < 0
+    is_flood <- !is.na(u_start) && u_start > 0
 
     if (mpar$interp && w > 0 && max(layer_idx) >= n_u_layers)
       stop("Simulation timeframe requires layer ", max(layer_idx) + 1L,
@@ -377,12 +389,125 @@ sim_fish <- function(
     ## Angular concentration (handles time-varying rho in bcrw)
     rho_i <- if (length(mpar$rho) > 1L) mpar$rho[i] else mpar$rho
 
-    ## Mean heading for each active simulation
+    ## ---- Local current, extracted BEFORE the heading is chosen --------------
+    ##
+    ## The rheotaxis movement models need to know which way the water is going
+    ## at each fish's own position before deciding where that fish swims, so
+    ## the extraction is hoisted above the heading switch. It used to sit
+    ## inside the advection block below. Two extract calls per step either way,
+    ## regardless of the number of simulations.
+    needs_flow <- mpar$move %in% c("rheo.pos", "rheo.neg", "rheo.tidal")
+    u_adj <- v_adj <- NULL
+
+    if (mpar$advect || needs_flow) {
+      k       <- layer_idx[i - 1L]
+      flood_i <- is_flood            ## scalar: determined once at simulation start time
+      pos_m   <- cbind(px, py)
+
+      if (w == 0) {
+        u_raw <- terra::extract(data$u[[k]],      pos_m, method = "simple")[, 1]
+        v_raw <- terra::extract(data$v[[k]],      pos_m, method = "simple")[, 1]
+      } else {
+        u_raw <- ((1 - w) * terra::extract(data$u[[k]],        pos_m, method = "simple")[, 1] +
+                        w  * terra::extract(data$u[[k + 1L]],  pos_m, method = "simple")[, 1])
+        v_raw <- ((1 - w) * terra::extract(data$v[[k]],        pos_m, method = "simple")[, 1] +
+                        w  * terra::extract(data$v[[k + 1L]],  pos_m, method = "simple")[, 1])
+      }
+
+      ## uvm convention: c(u.flood, v.flood, u.ebb, v.ebb), flood = u > 0.
+      ##
+      ## phase = "track" (the default and the long-standing behaviour): the
+      ## whole simulation uses the phase decided once at start.dt. Simple, but
+      ## wrong for any passage that spans a slack -- between 31 and 67 per cent
+      ## of them, depending on species -- because those get flood multipliers
+      ## applied through an ebb, or the reverse.
+      ##
+      ## phase = "step": the phase is decided fresh at every step, from the
+      ## sign of u at each fish's own position. More nearly correct, but it
+      ## changes what uvm MEANS: if uvm was calibrated against drifters under
+      ## the whole-track assumption, the fitted values absorbed that assumption
+      ## and should be refitted before this is trusted.
+      fl_i <- if (identical(mpar$phase, "step")) {
+        !is.na(u_raw) & u_raw > 0
+      } else {
+        rep(isTRUE(flood_i), length(u_raw))
+      }
+
+      u_adj <- ifelse(!is.na(u_raw),
+                      u_raw * ifelse(fl_i, mpar$uvm[1], mpar$uvm[3]),
+                      0) * advect_scale
+      v_adj <- ifelse(!is.na(v_raw),
+                      v_raw * ifelse(fl_i, mpar$uvm[2], mpar$uvm[4]),
+                      0) * advect_scale
+    }
+
+    ## ---- Mean heading for each active simulation ----------------------------
+    ##
+    ## Headings are compass bearings in radians: 0 is north, and a step of
+    ## length s is taken as (x + sin(mu) * s, y + cos(mu) * s). So the bearing
+    ## a current vector (u, v) is flowing TOWARD is atan2(u, v), and west is
+    ## atan2(-1, 0) = -pi/2.
+    ##
+    ## The four models added below all orient on the UVM-CORRECTED current
+    ## (u_adj, v_adj) rather than the raw field, because that is the model's
+    ## best estimate of the flow the fish is actually in, and because the two
+    ## components carry different multipliers, so the corrected vector points
+    ## in a slightly different direction from the raw one.
     phi <- switch(mpar$move,
       bcrw = rep(
         if (length(mpar$bearing) > 1L) mpar$bearing[i] else mpar$bearing,
         n_act),
       crw = ph,
+
+      ## Swim westward, out through Minas Passage toward the Bay of Fundy,
+      ## whatever the tide is doing. A fixed bearing, so this is bcrw with the
+      ## bearing supplied rather than asked for.
+      west = rep(atan2(-1, 0), n_act),
+
+      ## Positive rheotaxis: head into the flow, on the reciprocal of the
+      ## bearing the water is travelling toward.
+      rheo.pos = {
+        if (is.null(u_adj)) stop("rheo.pos requires a current field; ",
+                                 "run sim_setup() and leave advect = TRUE")
+        h <- atan2(-u_adj, -v_adj)
+        ## Slack water has no direction to orient to. Keep the previous
+        ## heading rather than drawing an arbitrary one.
+        h[!is.finite(h) | (u_adj == 0 & v_adj == 0)] <-
+          ph[!is.finite(h) | (u_adj == 0 & v_adj == 0)]
+        h
+      },
+
+      ## Negative rheotaxis: head downstream, with the flow.
+      rheo.neg = {
+        if (is.null(u_adj)) stop("rheo.neg requires a current field; ",
+                                 "run sim_setup() and leave advect = TRUE")
+        h <- atan2(u_adj, v_adj)
+        h[!is.finite(h) | (u_adj == 0 & v_adj == 0)] <-
+          ph[!is.finite(h) | (u_adj == 0 & v_adj == 0)]
+        h
+      },
+
+      ## Tidal rheotaxis: go with the ebb, hold against the flood.
+      ##
+      ## Phase is decided HERE from the sign of u at this fish, at this step,
+      ## not from the whole-track is_flood scalar. is_flood is fixed for an
+      ## entire simulation, and between 31 and 67 per cent of passages span a
+      ## slack, so using it would apply the wrong rule for part of many tracks.
+      ##
+      ## Stated in terms of DIRECTION so it cannot be knocked over by a
+      ## labelling change: u < 0 is westward flow, out of Minas Basin toward
+      ## the Bay of Fundy, which is the ebb. Westward flow is ridden, eastward
+      ## (flood) flow is opposed.
+      rheo.tidal = {
+        if (is.null(u_adj)) stop("rheo.tidal requires a current field; ",
+                                 "run sim_setup() and leave advect = TRUE")
+        with_flow <- u_adj < 0                      # westward: ride it
+        h <- ifelse(with_flow, atan2(u_adj, v_adj), atan2(-u_adj, -v_adj))
+        h[!is.finite(h) | (u_adj == 0 & v_adj == 0)] <-
+          ph[!is.finite(h) | (u_adj == 0 & v_adj == 0)]
+        h
+      },
+
       bcrw.coa = {
         d_x <- mpar$coa[1] - px
         d_y <- mpar$coa[2] - py
@@ -405,29 +530,8 @@ sim_fish <- function(
     new_x <- px + sin(mu) * s_i
     new_y <- py + cos(mu) * s_i
 
-    ## Batched FVCOM advection — 2 extract calls regardless of nsim
+    ## ---- Apply the advection computed above ---------------------------------
     if (mpar$advect) {
-      k       <- layer_idx[i - 1L]
-      flood_i <- is_flood            ## scalar: determined once at simulation start time
-      pos_m   <- cbind(px, py)
-
-      if (w == 0) {
-        u_raw <- terra::extract(data$u[[k]],      pos_m, method = "simple")[, 1]
-        v_raw <- terra::extract(data$v[[k]],      pos_m, method = "simple")[, 1]
-      } else {
-        u_raw <- ((1 - w) * terra::extract(data$u[[k]],        pos_m, method = "simple")[, 1] +
-                        w  * terra::extract(data$u[[k + 1L]],  pos_m, method = "simple")[, 1])
-        v_raw <- ((1 - w) * terra::extract(data$v[[k]],        pos_m, method = "simple")[, 1] +
-                        w  * terra::extract(data$v[[k + 1L]],  pos_m, method = "simple")[, 1])
-      }
-
-      ## uvm convention: c(u.flood, v.flood, u.ebb, v.ebb)
-      u_adj <- ifelse(!is.na(u_raw),
-                      u_raw * if (flood_i) mpar$uvm[1] else mpar$uvm[3],
-                      0) * advect_scale
-      v_adj <- ifelse(!is.na(v_raw),
-                      v_raw * if (flood_i) mpar$uvm[2] else mpar$uvm[4],
-                      0) * advect_scale
       new_x         <- new_x + u_adj
       new_y         <- new_y + v_adj
       u_mat[act, i] <- u_adj

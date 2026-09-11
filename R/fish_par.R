@@ -77,14 +77,22 @@
 ##'       phase-invariant.
 ##'     \item \strong{4-element} \code{c(u.flood, v.flood, u.ebb, v.ebb)}:
 ##'       separate multipliers for each component in each tidal phase.
-##'       Tidal phase at each step is determined by the sign of the u
-##'       current extracted at the start receiver location:
-##'       \code{u < 0} = flood (flow into the Bay of Fundy);
-##'       \code{u >= 0} = ebb. This is the recommended form when
-##'       calibrations show phase-dependent bias in the FVCOM currents.
+##'       Tidal phase is determined once, from the sign of the u current
+##'       extracted at the start receiver location:
+##'       \code{u > 0} = flood, eastward flow filling Minas Basin;
+##'       \code{u <= 0} = ebb, westward flow out toward the Bay of Fundy.
+##'       This is the recommended form when calibrations show
+##'       phase-dependent bias in the FVCOM currents.
 ##'   }
 ##'   Default \code{c(1, 1)} (no rescaling).
 ##' @param advect    Logical; advect by FVCOM currents. Default \code{TRUE}.
+##' @param phase     How often the flood/ebb decision that selects the
+##'   \code{uvm} pair is made. \code{"track"} (default) decides once at
+##'   \code{start.dt} from u at the start receiver and holds it for the whole
+##'   simulation. \code{"step"} decides afresh at every step from u at each
+##'   simulation's own position, which is more nearly correct for passages
+##'   spanning a slack but changes what \code{uvm} means: values calibrated
+##'   under \code{"track"} absorbed that assumption and should be refitted.
 ##' @param interp    Logical; if \code{TRUE}, linearly interpolate u and v
 ##'   between the two FVCOM layers bracketing \code{start.dt} (2 extracts
 ##'   per step). Default \code{FALSE} (snap to nearest layer).
@@ -135,6 +143,7 @@ fish_par <- function(
     buffer    = 1,
     uvm       = c(1, 1),
     advect    = TRUE,
+    phase     = c("track", "step"),
     interp    = FALSE,
     seed      = NULL,
     method    = "rejection"
@@ -157,10 +166,31 @@ fish_par <- function(
   if (!is.numeric(det.range) || length(det.range) != 1 || det.range <= 0)
     stop("det.range must be a positive scalar (km)")
 
-  move   <- match.arg(move,   c("crw", "bcrw", "bcrw.coa", "crw.bridge"))
+  move   <- match.arg(move,   c("crw", "bcrw", "bcrw.coa", "crw.bridge",
+                                "west", "rheo.pos", "rheo.neg", "rheo.tidal"))
   method <- match.arg(method, "rejection")   ## extend to c("rejection", "bridge") for option 3
 
-  if (move == "crw") {
+  if (move %in% c("west", "rheo.pos", "rheo.neg", "rheo.tidal")) {
+    ## Four scenario models added for the Minas Passage batch work. All take
+    ## their heading from something other than the previous heading, so none of
+    ## them uses bearing, coa or nu:
+    ##
+    ##   west        swim due west, out through the Passage toward the Bay of
+    ##               Fundy, whatever the tide is doing
+    ##   rheo.pos    positive rheotaxis: head into the flow
+    ##   rheo.neg    negative rheotaxis: head downstream, with the flow
+    ##   rheo.tidal  ride the westward (ebb) flow, hold against the eastward
+    ##               (flood) flow, decided fresh at every step from the local
+    ##               current rather than once per track
+    ##
+    ## The three rheotaxis models need a current field, so they require
+    ## advect = TRUE and a data list from sim_setup().
+    if (move != "west" && !isTRUE(advect))
+      stop("move = '", move, "' needs the current field; set advect = TRUE")
+    bearing <- NULL
+    coa     <- NULL
+    nu      <- NULL
+  } else if (move == "crw") {
     ## No directional bias: bearing, coa, and nu are not used
     bearing <- NULL
     coa     <- NULL
@@ -201,6 +231,12 @@ fish_par <- function(
   if (!is.logical(advect) || length(advect) != 1)
     stop("advect must be TRUE or FALSE")
 
+  ## How often the flood/ebb decision that selects the uvm pair is made.
+  ##   "track"  once, at start.dt, from u at the start receiver (the default,
+  ##            and what every result before this option was computed under)
+  ##   "step"   afresh at every step, from u at each fish's own position
+  phase <- match.arg(phase)
+
   if (!is.null(noise) && (!is.numeric(noise) || length(noise) != 1 || noise < 0))
     stop("noise must be NULL or a non-negative scalar (sd in km)")
 
@@ -239,6 +275,7 @@ fish_par <- function(
       end       = end,
       det.range = det.range,
       move      = move,
+      phase     = phase,
       method    = method,
       bearing   = bearing,
       coa       = coa,
@@ -280,7 +317,16 @@ print.fish_par <- function(x, ...) {
   cat(sprintf("  seed:      %s\n",
               if (is.null(x$seed)) "none (not reproducible)" else format(x$seed)))
   cat(sprintf("  move:      %s\n", x$move))
-  if (x$move == "crw") {
+  cat(sprintf("  uvm phase: decided %s\n",
+              if (identical(x$phase, "step")) "at every step, from the local current"
+              else "once, at start.dt, from the start receiver"))
+  if (x$move %in% c("west", "rheo.pos", "rheo.neg", "rheo.tidal")) {
+    cat(sprintf("  heading:   %s\n", switch(x$move,
+      west       = "due west, regardless of tide",
+      rheo.pos   = "into the flow (positive rheotaxis)",
+      rheo.neg   = "with the flow (negative rheotaxis)",
+      rheo.tidal = "with westward flow, against eastward flow")))
+  } else if (x$move == "crw") {
     cat("  (no directional bias — heading self-correlated via rho)\n")
   } else if (x$move == "bcrw") {
     cat(sprintf("  bearing:   %.4f rad\n", x$bearing))

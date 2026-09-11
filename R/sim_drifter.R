@@ -163,11 +163,14 @@ sim_drifter <- function(
          " but data$u only has ", n_u_layers, " layers.\n",
          "  Reduce N or re-run sim_setup() with additional months.")
 
-  ## Determine tidal phase once at simulation start time from u at start location.
+  ## Determine tidal phase once at simulation start time from u at start
+  ## location. FLOOD = u > 0, eastward, filling Minas Basin. EBB = u <= 0,
+  ## westward, out toward the Bay of Fundy. Corrected from u < 0; see the
+  ## matching note in sim_fish.R.
   is_flood <- if (mpar$advect) {
     ref_pos <- matrix(mpar$start, nrow = 1L)
     u0      <- extract(data$u[[layer_idx[1L]]], ref_pos, method = "simple")[1L, 1L]
-    !is.na(u0) && u0 < 0
+    !is.na(u0) && u0 > 0
   } else {
     FALSE
   }
