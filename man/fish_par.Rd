@@ -26,6 +26,9 @@ fish_par(
   advect = TRUE,
   phase = c("track", "step"),
   interp = FALSE,
+  det.xy = NULL,
+  phase.min.steps = 2L,
+  extend.max = NULL,
   seed = NULL,
   method = "rejection"
 )

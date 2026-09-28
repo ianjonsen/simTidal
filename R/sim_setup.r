@@ -23,6 +23,27 @@
 #'   exactly the point at which rounding would pick a neighbour. Label jitter
 #'   from float32 time storage is typically ~0.3 of a step and passes; a missing
 #'   day-file is off by 144 steps and does not.
+#' @param avg.window - length in SECONDS of the averaging window each layer
+#'   represents, for FVCOM "average output" files. Those files label every
+#'   record with the END of its window, so a layer labelled \code{t} actually
+#'   holds the mean field over \code{[t - avg.window, t]}, centred at
+#'   \code{t - avg.window / 2}. The fitted origin is moved back by half the
+#'   window so that every time in the package refers to window centres
+#'   rather than window ends. Default 600 (the ten-minute Minas Passage
+#'   output). Set to 0 for instantaneous output. Because half a window is
+#'   not a whole number of layers, this correction only survives to the
+#'   simulation if \code{interp = TRUE}; with \code{interp = FALSE} the
+#'   start time is snapped back to a layer boundary and it is discarded.
+#' @param fvcom.lead - seconds by which the MODELLED TIDE RUNS AHEAD of the
+#'   real ocean. Positive means FVCOM is early: the state it reports at a given
+#'   moment does not arrive until \code{fvcom.lead} seconds later, so a
+#'   simulation wanting the ocean at \code{t} must be handed the field from
+#'   \code{t - fvcom.lead}. Applied by advancing the fitted origin, so
+#'   \code{sim_fish()} and \code{sim_drifter()} need no change. Default 0.
+#'   For the Minas Passage rasters use 1200 together with
+#'   \code{avg.window = 600}; see the measurement note below the axis check.
+#'   A value that is not a whole number of layers is applied correctly in
+#'   expectation and should NOT be rounded.
 #' @param year  - 4-digit year as a character string, e.g. \code{"2025"}.
 #'   Used to locate the year-level subdirectory in the FVCOM current data tree
 #'   (\code{{fvcom}/u/{year}/{Month}/}).
@@ -56,7 +77,9 @@
 sim_setup <- function(config = config,
                       month  = "July",
                       year,
-                      axis.tol = 0.5) {
+                      axis.tol = 0.5,
+                      avg.window = 600,
+                      fvcom.lead = 0) {
 
   if (missing(year) || !is.character(year) || length(year) != 1 ||
       !grepl("^[0-9]{4}$", year))
@@ -210,6 +233,130 @@ sim_setup <- function(config = config,
   if (anyNA(v_times) || length(v_times) != n_lyr || !all(v_times == u_times))
     stop("u and v time axes differ (", n_lyr, " u layers vs ", length(v_times),
          " v layers). Re-run process_month() for the affected month(s).")
+
+  ## ---- Move the time base to averaging-window centres ----------------------
+  ##
+  ## The Minas Passage rasters are built from FVCOM "average output" files
+  ## (title: "acadia_force_3d; Average output file!"). Those files label each
+  ## record with the END of its averaging window -- the May 2023 file runs
+  ## 00:10 on the 1st through 00:00 on the 1st of June, 4464 records for a
+  ## 31-day month -- so the layer labelled t holds the mean field over
+  ## [t - avg.window, t], which represents the ocean at t - avg.window / 2.
+  ##
+  ## This is a property of the data, not an error in the model, and it is
+  ## kept separate from `fvcom.lead` for that reason. Moving the origin back
+  ## by half a window makes every time in the package a window CENTRE, which
+  ## is what the drifter velocities are already on: uv_pairs() forms a
+  ## centred difference over one full step about the layer time, so observed
+  ## and modelled velocities then average the same 600 seconds of ocean
+  ## rather than two windows offset by five minutes.
+  ##
+  ## Half a window is never a whole number of layers, so this only reaches
+  ## the simulation through interp = TRUE. With interp = FALSE sim_fish()
+  ## snaps the start time to the nearest layer boundary and the shift is
+  ## thrown away -- it will warn when that happens.
+  if (!is.numeric(avg.window) || length(avg.window) != 1L || is.na(avg.window) ||
+      avg.window < 0)
+    stop("avg.window must be a single non-negative number of seconds")
+  if (avg.window > 0) {
+    origin <- origin - avg.window / 2
+    out[["fvcom.origin"]] <- origin
+    message(sprintf(
+      "  FVCOM time base moved to window centres: labels mark the end of a %.0f-min\n  averaging window, so every layer time is read as %.1f min earlier",
+      avg.window / 60, avg.window / 120))
+  }
+  out[["avg.window"]] <- avg.window
+
+  ## ---- Correct a phase error in the modelled tide ---------------------------
+  ##
+  ## `fvcom.lead` is the number of SECONDS BY WHICH THE MODELLED TIDE RUNS AHEAD
+  ## OF THE REAL OCEAN. Positive means FVCOM is early: the state it reports at a
+  ## given moment does not actually arrive until `fvcom.lead` seconds later. The
+  ## correction is therefore to read FVCOM at (t - fvcom.lead) whenever the
+  ## simulation wants the ocean at time t, and shifting the fitted origin
+  ## forward by the same amount achieves exactly that, because every layer
+  ## lookup in the package is round((t - fvcom.origin) / fvcom_step_secs).
+  ## Doing it here means sim_fish() and sim_drifter() need no change at all.
+  ##
+  ## MEASURED VALUE FOR THE MINAS PASSAGE RASTERS: 1200 s, used together with
+  ## avg.window = 600. Three independent lines agree, none sharing data with
+  ## the others:
+  ##
+  ##   drifters      uv_lag() on the WINDOW-CENTRED time base, where the best
+  ##                 lag reads the physical lead directly rather than the lead
+  ##                 minus the averaging window. Grid optimum -20 min; the
+  ##                 parabola through -30/-20/-10 puts the vertex at -23.6.
+  ##                 184 loops, 13,517 paired velocities, May-Aug 2022.
+  ##   detections    slack water falls 24.5 min before the midpoint of 164
+  ##                 acoustic detection intervals (Wilcoxon p = 1.2e-10).
+  ##                 No drifters and no gauges are involved.
+  ##   tide gauges   modelled surface elevation leads Canadian Hydrographic
+  ##                 Service high and low water by 8.3 min (Burntcoat Head,
+  ##                 May 2023), 12.9 (Burntcoat Head, May 2019) and 18.4
+  ##                 (Parrsboro, May 2023).
+  ##
+  ## 1200 is the conservative end of the 1200-1470 s range these span; the
+  ## spread is about four minutes, half a per cent of a tidal cycle. The gauge
+  ## figures run lower than the velocity ones, and whether that is because
+  ## elevation and current phase genuinely differ or because neither gauge sits
+  ## inside the Passage cannot be settled: no Ocean Networks Canada record from
+  ## the FORCE Underwater Network overlaps these periods.
+  ##
+  ## Applying it cut held-out velocity error from 0.305 to 0.205 m/s, a third,
+  ## against 2-4 per cent for the choice of multiplier form. It also invalidated
+  ## the multipliers then in use, which had been fitted at lag zero on pairs
+  ## whose own best lag was -20 min.
+  ##
+  ## Not an instrument or clock artefact: three independently deployed drifter
+  ## rigs agree to within a minute, and there is no relationship to the
+  ## spring-neap cycle (Spearman +0.03 against peak current speed).
+  ##
+  ## CAVEAT, UNRESOLVED. The lead varies by month -- 15 min in May, 6 in June,
+  ## 24 in August -- by more than estimation noise. A single constant captures
+  ## 24.9 of the 27.4 percentage points a per-month correction would give, and
+  ## a per-loop correction overfits, so one constant is used. But the drifter
+  ## sample is August-weighted (3,309 paired samples in May, 1,962 June, 23
+  ## July, 8,245 August) while every smolt passage falls in May, June or July
+  ## and none in August. Whether a constant fitted mostly on August costs
+  ## anything in spring has not been tested.
+  ##
+  ## CONFIRMATION TEST, before trusting anything fitted on top of this: rebuild
+  ## the drifter pairs against sim_setup(fvcom.lead = 1200, avg.window = 600)
+  ## and uv_lag() must return at or near zero. If it still says -20 the lead is
+  ## not reaching uv_pairs() and nothing downstream is trustworthy.
+  ##
+  ## Full derivation, confounds tested and code: fn/uv_calibrate.R and
+  ## fn/slack_offset.R in the minas project, and
+  ## doc/minas_fvcom_timing_calibration.docx.
+  ##
+  ## The lead is applied AFTER the axis check above, so that check still tests
+  ## the layers as they are labelled rather than as they have been shifted.
+  if (!is.numeric(fvcom.lead) || length(fvcom.lead) != 1L || is.na(fvcom.lead))
+    stop("fvcom.lead must be a single number of seconds")
+  if (fvcom.lead != 0) {
+    ## NOTE: a lead that is not a whole number of layers is NOT discarded.
+    ## Writing s = t - origin, the layer selected has label
+    ##   origin + step * round((s - lead) / step)
+    ## whose expectation over start times is t - lead, for ANY lead. The
+    ## rounding error has mean zero whatever the lead is, and the per-track
+    ## quantisation of +/- half a step is present regardless. So the lead may
+    ## be set to the fitted optimum rather than rounded to a multiple of the
+    ## step; interp = TRUE removes the per-track quantisation, not a bias.
+    ## An earlier version of this warning said the opposite and a real choice
+    ## was made on it (1200 s adopted over a fitted 1080 s).
+    if (abs(fvcom.lead) %% step_secs != 0 && isTRUE(getOption("simTidal.verbose")))
+      message(sprintf(paste0(
+        "  fvcom.lead (%g s) is not a whole number of %g-min layers. That is\n",
+        "  fine: the correction is applied exactly in expectation. Individual\n",
+        "  tracks are still quantised to +/- %g s; interp = TRUE removes that."),
+        fvcom.lead, step_secs / 60, step_secs / 2))
+    origin <- origin + fvcom.lead
+    out[["fvcom.origin"]] <- origin
+    message(sprintf(
+      "  FVCOM tide shifted: the model is treated as running %.1f min ahead",
+      fvcom.lead / 60))
+  }
+  out[["fvcom.lead"]] <- fvcom.lead
 
   out[["month"]] <- month   ## character vector, calendar-ordered
   out[["year"]]  <- year

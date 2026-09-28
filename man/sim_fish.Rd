@@ -25,8 +25,10 @@ An object of class \code{sim_fish} with elements:
   \describe{
     \item{\code{sims}}{List of \code{n_sim} tibbles, each with columns
       \code{id}, \code{date}, \code{x}, \code{y}, \code{u}, \code{v}.
-      Accepted tracks are truncated at the detection step; all others
-      run to step \code{N} (or the last valid step if stopped early).}
+      EVERY simulation runs to step \code{N} (or to the last valid step if
+      it stopped early); detection does not truncate a track. An earlier
+      version of this note said accepted tracks were cut at the detection
+      step, which the code has not done for some time.}
     \item{\code{accepted}}{Logical vector of length \code{n_sim};
       \code{TRUE} when the simulation passed within \code{det.range}
       of the end receiver at any step.}

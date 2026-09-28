@@ -145,6 +145,9 @@ fish_par <- function(
     advect    = TRUE,
     phase     = c("track", "step"),
     interp    = FALSE,
+    det.xy    = NULL,
+    phase.min.steps = 2L,
+    extend.max      = NULL,
     seed      = NULL,
     method    = "rejection"
 ) {
@@ -243,6 +246,40 @@ fish_par <- function(
   if (!is.logical(interp) || length(interp) != 1)
     stop("interp must be TRUE or FALSE")
 
+  ## Every receiver in THIS passage's deployment, two columns of UTM km. When
+  ## supplied, sim_fish() additionally records the first armed entry within
+  ## det.range of any of them; when NULL those records come back all NA and
+  ## nothing else changes. Station numbers repeat between deployments, so this
+  ## must be the set for the passage's own file_tag.
+  if (!is.null(det.xy)) {
+    det.xy <- as.matrix(det.xy)
+    if (!is.numeric(det.xy) || ncol(det.xy) != 2L || !nrow(det.xy))
+      stop("det.xy must be a two-column numeric matrix of receiver positions (x, y in km)")
+    det.xy <- det.xy[stats::complete.cases(det.xy), , drop = FALSE]
+    if (!nrow(det.xy))
+      stop("det.xy has no rows with both coordinates present")
+  }
+
+  ## A tidal phase change must persist this many consecutive steps before a
+  ## simulation is armed. One step is too few -- an eddy or a numerical wobble
+  ## at slack water flips the sign of u for a single step. Two 10-minute steps
+  ## is the default.
+  if (!is.numeric(phase.min.steps) || length(phase.min.steps) != 1L ||
+      phase.min.steps < 1)
+    stop("phase.min.steps must be a single integer of at least 1")
+  phase.min.steps <- as.integer(phase.min.steps)
+
+  ## How many steps the simulation may run PAST the observed arrival, so that a
+  ## late crossing is recorded as late rather than as absent. sim_fish() stops
+  ## each simulation earlier than this, at the next turn of the tide. The
+  ## default is half an M2 cycle (6.21 h), which is exactly one more chance to
+  ## be carried back; NULL or 0 restores the old truncated behaviour.
+  if (is.null(extend.max))
+    extend.max <- as.integer(ceiling(6.21 * 3600 / (time.step * 60)))
+  if (!is.numeric(extend.max) || length(extend.max) != 1L || extend.max < 0)
+    stop("extend.max must be a single non-negative number of steps")
+  extend.max <- as.integer(extend.max)
+
   seed <- .check_seed(seed)
 
   ## ---- Derive N from detection times -----------------------------------------
@@ -289,6 +326,9 @@ fish_par <- function(
       uvm       = uvm,
       advect    = advect,
       interp    = interp,
+      det.xy    = det.xy,
+      phase.min.steps = phase.min.steps,
+      extend.max      = extend.max,
       seed      = seed,
       land      = FALSE,
       boundary  = FALSE

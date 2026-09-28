@@ -4,7 +4,14 @@
 \alias{sim_setup}
 \title{Pre-simulation setup}
 \usage{
-sim_setup(config = config, month = "July", year, axis.tol = 0.5)
+sim_setup(
+  config = config,
+  month = "July",
+  year,
+  axis.tol = 0.5,
+  avg.window = 600,
+  fvcom.lead = 0
+)
 }
 \arguments{
 \item{config}{- path to config.R script containing file.paths for required
@@ -32,6 +39,29 @@ lookup would select the wrong layer. Default 0.5 (half a step), which is
 exactly the point at which rounding would pick a neighbour. Label jitter
 from float32 time storage is typically ~0.3 of a step and passes; a missing
 day-file is off by 144 steps and does not.}
+
+\item{avg.window}{- length in SECONDS of the averaging window each layer
+represents, for FVCOM "average output" files. Those files label every
+record with the END of its window, so a layer labelled \code{t} actually
+holds the mean field over \code{[t - avg.window, t]}, centred at
+\code{t - avg.window / 2}. The fitted origin is moved back by half the
+window so that every time in the package refers to window centres
+rather than window ends. Default 600 (the ten-minute Minas Passage
+output). Set to 0 for instantaneous output. Because half a window is
+not a whole number of layers, this correction only survives to the
+simulation if \code{interp = TRUE}; with \code{interp = FALSE} the
+start time is snapped back to a layer boundary and it is discarded.}
+
+\item{fvcom.lead}{- seconds by which the MODELLED TIDE RUNS AHEAD of the
+real ocean. Positive means FVCOM is early: the state it reports at a given
+moment does not arrive until \code{fvcom.lead} seconds later, so a
+simulation wanting the ocean at \code{t} must be handed the field from
+\code{t - fvcom.lead}. Applied by advancing the fitted origin, so
+\code{sim_fish()} and \code{sim_drifter()} need no change. Default 0.
+For the Minas Passage rasters use 1200 together with
+\code{avg.window = 600}; see the measurement note below the axis check.
+A value that is not a whole number of layers is applied correctly in
+expectation and should NOT be rounded.}
 }
 \description{
 load required rasters, receiver locations

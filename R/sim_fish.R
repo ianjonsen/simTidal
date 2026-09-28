@@ -29,8 +29,10 @@
 #'   \describe{
 #'     \item{\code{sims}}{List of \code{n_sim} tibbles, each with columns
 #'       \code{id}, \code{date}, \code{x}, \code{y}, \code{u}, \code{v}.
-#'       Accepted tracks are truncated at the detection step; all others
-#'       run to step \code{N} (or the last valid step if stopped early).}
+#'       EVERY simulation runs to step \code{N} (or to the last valid step if
+#'       it stopped early); detection does not truncate a track. An earlier
+#'       version of this note said accepted tracks were cut at the detection
+#'       step, which the code has not done for some time.}
 #'     \item{\code{accepted}}{Logical vector of length \code{n_sim};
 #'       \code{TRUE} when the simulation passed within \code{det.range}
 #'       of the end receiver at any step.}
@@ -174,7 +176,29 @@ sim_fish <- function(
   }
 
   step_secs <- mpar$time.step * 60L
-  N    <- mpar$N
+  ## ---- RUN PAST THE OBSERVED ARRIVAL, TO THE NEXT TURN OF THE TIDE --------
+  ##
+  ## `N` is the number of steps between the two real detections. Stopping there
+  ## makes a LATE arrival unobservable: a fish delayed past N is recorded as
+  ## never having crossed rather than as having crossed late, so the delay that
+  ## swimming against the flood produces is converted into an absence.
+  ##
+  ## Measured on the 2023 fish 24 passage under tidal rheotaxis: truncating at
+  ## N, the crossing rate falls from 1.000 at 0.25 body lengths per second to
+  ## 0.520 at 4. Allowed to run on, it falls only to 0.780, and 26 % of the
+  ## fast simulations cross AFTER N. Half of the fast fish were being thrown
+  ## away, which is why the bl profile looked flat.
+  ##
+  ## The run therefore continues past N until each simulation next sees the
+  ## tide turn -- the same phase test used for arming -- capped at
+  ## `extend.max` steps. A fish that misses its tide gets the chance to come
+  ## back on the following one, and no further.
+  N_obs <- mpar$N
+  ext   <- if (is.null(mpar$extend.max)) 0L else as.integer(mpar$extend.max)
+  N     <- N_obs + ext
+  turned_after  <- rep(FALSE, mpar$n_sim)   # tide has turned again since N_obs
+  post_sign     <- rep(NA_real_, mpar$n_sim)
+  post_run      <- rep(0L, mpar$n_sim)
   nsim <- mpar$n_sim
 
   ## ---- FVCOM setup (advect = TRUE only) -------------------------------------
@@ -237,6 +261,8 @@ sim_fish <- function(
       stop("start.dt (", format(start.dt), ") is later than available FVCOM data.\n",
            "  data covers: ", format(fvcom.origin), " to ", format(data_end_dt))
 
+    ## uses the EXTENDED N, so a run that would overrun the rasters fails here
+    ## rather than part way through the extension
     sim_end_dt <- start.dt + N * step_secs
     if (sim_end_dt > data_end_dt)
       stop("Simulation end time (", format(sim_end_dt),
@@ -306,6 +332,103 @@ sim_fish <- function(
   u_mat          <- matrix(0,           nsim, N)
   v_mat          <- matrix(0,           nsim, N)
   active         <- rep(TRUE,           nsim)
+  ## ---- second detection record: ANY receiver, not just the end one --------
+  ##
+  ## `det.xy` is every receiver in this passage's own deployment. Station
+  ## numbers are NOT unique across deployments -- station 1 sits at three
+  ## different positions in the Minas files -- so the caller must pass the set
+  ## belonging to this passage's file_tag, not a global list.
+  ##
+  ## ARMING IS NOT OPTIONAL. A simulation starts uniformly within det.range of
+  ## the START receiver, and in this array receivers are often closer together
+  ## than det.range -- several pairs are 20 to 200 m apart against a 300 m
+  ## range. So at step one almost every simulation is already inside some
+  ## receiver's radius, and an unarmed "any receiver" test would accept
+  ## everything at step one regardless of how the fish swims. A simulation
+  ## therefore becomes eligible only once it has been farther than det.range
+  ## from EVERY receiver at least once: the event being recorded is leaving the
+  ## array and coming back, which is what the observation is.
+  ##
+  ## `det_step_end_armed` applies the same arming to the ORIGINAL end-receiver
+  ## test, and exists to measure a contaminant rather than to replace anything:
+  ## 8 % of kept passages have their two stations closer together than
+  ## det.range, so those simulations begin inside the target and are accepted
+  ## at step one whatever bl is. `det_step` keeps the unarmed definition so
+  ## every result computed to date stays comparable.
+  ## `any_x`/`any_y` are WHERE the simulation crossed the array, and
+  ## `any_end_dist` is how far that is from the receiver the real fish was
+  ## detected at. That distance is the continuous version of the binary
+  ## detection record, and it is what movement scenarios can be compared on.
+  ##
+  ## Two things it is not. It has a floor: the real fish's own crossing point
+  ## is known only to within det.range, so a perfect simulation still scores a
+  ## few hundred metres. And it is the FIRST armed crossing, not the nearest --
+  ## a fish that crosses, leaves, and crosses again nearer the receiver is
+  ## scored on the first one, to match how det_step is defined.
+  ## ---- ARMING IS A TIDAL-PHASE TEST, NOT A DISTANCE ONE -------------------
+  ##
+  ## A crossing counts only once the tide has TURNED since the simulation
+  ## started. That is the same rule the passages themselves were selected on:
+  ## a fish crosses, is carried away, the tide turns, and it is carried back.
+  ## If the phase has not changed, the fish has not been anywhere and a
+  ## recorded crossing is the fish milling beside the array on its way out.
+  ##
+  ## The previous version armed on leaving a 300 m radius, which is far too
+  ## weak: receivers on this line sit 84 to 391 m apart, so a fish drifting a
+  ## few hundred metres off its release point re-enters a neighbour's circle
+  ## within two or three steps. 13 % of cells in the 2026-09-15 sweep had their
+  ## median crossing inside the first tenth of the passage, which is that
+  ## artefact and nothing else.
+  ##
+  ## Phase is the sign of the along-channel component u at the fish's OWN
+  ## position: u < 0 is westward, the ebb. A turn must persist for
+  ## `phase.min.steps` consecutive steps, so a single eddy or a numerical
+  ## wobble at slack water cannot arm a simulation on its own.
+  phase0             <- rep(NA_real_,    nsim)   # sign of u at the first step
+  phase_run          <- rep(0L,          nsim)   # consecutive steps at the new sign
+  armed              <- rep(FALSE,       nsim)   # TRUE once the tide has turned
+  armed_step         <- rep(NA_integer_, nsim)
+  pmin <- if (is.null(mpar$phase.min.steps)) 2L else as.integer(mpar$phase.min.steps)
+
+  detected_any       <- rep(FALSE,       nsim)
+  det_step_any       <- rep(NA_integer_, nsim)
+  any_dist           <- rep(NA_real_,    nsim)
+  any_end_dist       <- rep(NA_real_,    nsim)
+  any_x              <- rep(NA_real_,    nsim)
+  any_y              <- rep(NA_real_,    nsim)
+  det_which_any      <- rep(NA_integer_, nsim)
+
+  ## ---- LINE CROSSING, the primary record ----------------------------------
+  ##
+  ## Proximity to a receiver is not what the model can resolve. The residual
+  ## velocity error puts a simulated particle of order a kilometre from truth
+  ## over a passage of this length, so asking it to thread within 300 m of one
+  ## of 24 points is a lottery: on the 2023 fish 24 passage, 99 % of the
+  ## simulations that FAILED the 300 m test came within 2 km of a receiver on
+  ## the way back, 66 % within 1 km, median closest approach 851 m, and their
+  ## journeys were otherwise identical to the ones that passed.
+  ##
+  ## So the primary test is whether the step SEGMENT intersects the receiver
+  ## polyline -- did the fish cross the line, and when. That is resolvable, and
+  ## it is what the observation actually tells us.
+  crossed_line       <- rep(FALSE,       nsim)
+  line_step          <- rep(NA_integer_, nsim)
+  line_x             <- rep(NA_real_,    nsim)
+  line_y             <- rep(NA_real_,    nsim)
+  line_end_dist      <- rep(NA_real_,    nsim)
+  ## closest approach to the line, over the whole armed part of the track, so a
+  ## near miss is measurable rather than just absent
+  near_line          <- rep(Inf,         nsim)
+  near_line_step     <- rep(NA_integer_, nsim)
+  detected_end_armed <- rep(FALSE,       nsim)
+  det_step_end_armed <- rep(NA_integer_, nsim)
+  det_xy <- mpar$det.xy
+  if (!is.null(det_xy)) {
+    det_xy <- as.matrix(det_xy)
+    if (ncol(det_xy) != 2L || !nrow(det_xy) || !all(is.finite(det_xy)))
+      stop("det.xy must be a finite two-column matrix of receiver positions")
+  }
+
   detected       <- rep(FALSE,          nsim)
   early_stop_vec <- rep(FALSE,          nsim)
   det_step       <- rep(NA_integer_,    nsim)
@@ -338,12 +461,32 @@ sim_fish <- function(
   }
 
   ## Vectorised initial headings
+  ##
+  ## Every movement model needs one, because the step-1 heading is the value
+  ## the wrapped Cauchy is centred on (crw) or the documented fallback when the
+  ## model's own rule cannot produce a bearing (the rheotaxis models, at slack
+  ## water). Leaving a model out of this switch used to drop it through to
+  ## NA_real_, and an NA heading propagates silently: rwrpcauchy() returns NA,
+  ## the proposed position is NA, and the simulation is recorded as an early
+  ## stop rather than an error. That would have depressed the acceptance rate
+  ## of the rheotaxis models only, which is exactly the comparison they exist
+  ## to support, so the fall-through now stops rather than guessing.
   init_heads <- switch(mpar$move,
     crw        = runif(nsim, 0, 2 * pi),
     bcrw       = rep(mpar$bearing, nsim),
     bcrw.coa   = rep(init_heading_coa, nsim),
     crw.bridge = atan2(sim_end_x - s_x, sim_end_y - s_y),
-    rep(NA_real_, nsim)
+    ## Fixed bearing, so the previous heading is never consulted; the value is
+    ## set here only so that the stored heading column is never NA.
+    west       = rep(atan2(-1, 0), nsim),
+    ## The rheotaxis models take their bearing from the current at each step
+    ## and fall back on the previous heading only where the flow is too weak to
+    ## give one. At step 1 there is no previous heading, so an arbitrary one is
+    ## the honest choice, drawn the same way crw draws its first heading.
+    rheo.pos   = runif(nsim, 0, 2 * pi),
+    rheo.neg   = runif(nsim, 0, 2 * pi),
+    rheo.tidal = runif(nsim, 0, 2 * pi),
+    stop("no initial heading defined for move = '", mpar$move, "'")
   )
 
   xy_all[, 1L, 1L] <- s_x
@@ -577,6 +720,119 @@ sim_fish <- function(
       ## active[det_sims] is NOT set FALSE — simulations run to N
     }
 
+    ## ---- the any-receiver record, and the armed end-receiver record --------
+    if (!is.null(det_xy)) {
+      ix <- act[still]
+      sx <- new_x[still]; sy <- new_y[still]
+      dmin <- rep(Inf, length(sx)); wmin <- rep(NA_integer_, length(sx))
+      for (r in seq_len(nrow(det_xy))) {
+        dd <- sqrt((sx - det_xy[r, 1L])^2 + (sy - det_xy[r, 2L])^2)
+        up <- !is.na(dd) & dd < dmin
+        dmin[up] <- dd[up]; wmin[up] <- r
+      }
+      ## ---- arm on a sustained change of tidal phase ------------------------
+      if (mpar$advect) {
+        sg <- sign(u_adj[still])
+        first <- is.na(phase0[ix]) & sg != 0
+        if (any(first)) phase0[ix[first]] <- sg[first]
+        flipped <- !is.na(phase0[ix]) & sg != 0 & sg != phase0[ix]
+        phase_run[ix] <- ifelse(flipped, phase_run[ix] + 1L, 0L)
+        new_arm <- !armed[ix] & phase_run[ix] >= pmin
+        if (any(new_arm)) {
+          armed[ix[new_arm]]      <- TRUE
+          armed_step[ix[new_arm]] <- i
+        }
+      } else {
+        ## with advection off there is no tide to turn; fall back to the old
+        ## distance rule so the machinery still runs for a currents-off test
+        new_arm <- !armed[ix] & is.finite(dmin) & dmin > mpar$det.range
+        if (any(new_arm)) {
+          armed[ix[new_arm]]      <- TRUE
+          armed_step[ix[new_arm]] <- i
+        }
+      }
+      hit <- armed[ix] & is.finite(dmin) & dmin <= mpar$det.range & !detected_any[ix]
+      if (any(hit)) {
+        h <- ix[hit]
+        detected_any[h]  <- TRUE
+        det_step_any[h]  <- i
+        any_dist[h]      <- dmin[hit]
+        det_which_any[h] <- wmin[hit]
+        any_x[h]         <- sx[hit]
+        any_y[h]         <- sy[hit]
+        ## step_dists is already the distance to the observed end receiver for
+        ## exactly these simulations, so this is free.
+        any_end_dist[h]  <- step_dists[hit]
+      }
+      hit_e <- armed[ix] & !is.na(step_dists) & step_dists <= mpar$det.range &
+               !detected_end_armed[ix]
+      if (any(hit_e)) {
+        detected_end_armed[ix[hit_e]] <- TRUE
+        det_step_end_armed[ix[hit_e]] <- i
+      }
+
+      ## ---- did the step segment cross the receiver line? -------------------
+      if (nrow(det_xy) > 1L && i > 1L) {
+        px0 <- xy_all[ix, i - 1L, 1L]; py0 <- xy_all[ix, i - 1L, 2L]
+        ok  <- is.finite(px0) & is.finite(py0) & is.finite(sx) & is.finite(sy)
+        if (any(ok)) {
+          bestt <- rep(NA_real_, length(sx))
+          for (r in seq_len(nrow(det_xy) - 1L)) {
+            ax <- det_xy[r, 1L];     ay <- det_xy[r, 2L]
+            bx <- det_xy[r + 1L, 1L]; by <- det_xy[r + 1L, 2L]
+            rx <- sx - px0; ry <- sy - py0
+            ssx <- bx - ax;  ssy <- by - ay
+            den <- rx * ssy - ry * ssx
+            g   <- ok & abs(den) > 1e-12
+            tt  <- rep(NA_real_, length(sx)); uu <- tt
+            tt[g] <- ((ax - px0[g]) * ssy - (ay - py0[g]) * ssx) / den[g]
+            uu[g] <- ((ax - px0[g]) * ry[g] - (ay - py0[g]) * rx[g]) / den[g]
+            hitseg <- g & !is.na(tt) & tt >= 0 & tt <= 1 & uu >= 0 & uu <= 1
+            upd <- hitseg & (is.na(bestt) | tt < bestt)
+            bestt[upd] <- tt[upd]
+          }
+          xed <- armed[ix] & !crossed_line[ix] & !is.na(bestt)
+          if (any(xed)) {
+            h  <- ix[xed]; tt <- bestt[xed]
+            cx <- px0[xed] + tt * (sx[xed] - px0[xed])
+            cy <- py0[xed] + tt * (sy[xed] - py0[xed])
+            crossed_line[h]  <- TRUE
+            line_step[h]     <- i
+            line_x[h]        <- cx
+            line_y[h]        <- cy
+            line_end_dist[h] <- sqrt((cx - mpar$end[1])^2 + (cy - mpar$end[2])^2)
+          }
+        }
+      }
+
+      ## ---- past N_obs: stop each simulation at the next turn of the tide ---
+      ## The extension exists to make a LATE arrival visible, not to run the
+      ## fish indefinitely. One further turn of the tide is the fish's next
+      ## opportunity to be carried back; after that it is genuinely gone.
+      if (ext > 0L && i > N_obs && mpar$advect) {
+        sg2  <- sign(u_adj[still])
+        newp <- is.na(post_sign[ix]) & sg2 != 0
+        if (any(newp)) post_sign[ix[newp]] <- sg2[newp]
+        fl2  <- !is.na(post_sign[ix]) & sg2 != 0 & sg2 != post_sign[ix]
+        post_run[ix] <- ifelse(fl2, post_run[ix] + 1L, 0L)
+        done <- !turned_after[ix] & post_run[ix] >= pmin
+        if (any(done)) {
+          turned_after[ix[done]] <- TRUE
+          active[ix[done]]       <- FALSE
+        }
+      }
+
+      ## ---- closest approach to the line, armed part of the track only ------
+      if (any(armed[ix])) {
+        dl <- .dist_to_polyline(sx, sy, det_xy)
+        upd <- armed[ix] & is.finite(dl) & dl < near_line[ix]
+        if (any(upd)) {
+          near_line[ix[upd]]      <- dl[upd]
+          near_line_step[ix[upd]] <- i
+        }
+      }
+    }
+
     if (pb) setTxtProgressBar(tpb, i)
   }
 
@@ -636,6 +892,32 @@ sim_fish <- function(
       accepted        = accepted,
       end_dist        = end_dist,
       det_step        = det_step,
+      ## second and third records; all NA when det.xy was not supplied
+      detected_any       = detected_any,
+      det_step_any       = det_step_any,
+      any_dist           = any_dist,
+      any_end_dist       = any_end_dist,
+      any_x              = any_x,
+      any_y              = any_y,
+      det_which_any      = det_which_any,
+      armed              = armed,
+      armed_step         = armed_step,
+      phase0             = phase0,
+      crossed_line       = crossed_line,
+      line_step          = line_step,
+      line_x             = line_x,
+      line_y             = line_y,
+      line_end_dist      = line_end_dist,
+      near_line          = ifelse(is.finite(near_line), near_line, NA_real_),
+      near_line_step     = near_line_step,
+      N_obs              = N_obs,
+      ## TRUE when the crossing happened after the fish was actually detected.
+      ## Under the old truncated design these simulations were indistinguishable
+      ## from ones that never crossed at all.
+      crossed_late       = !is.na(line_step) & line_step > N_obs,
+      turned_after       = turned_after,
+      detected_end_armed = detected_end_armed,
+      det_step_end_armed = det_step_end_armed,
       det_locs        = det_locs,
       n_accepted      = n_accepted,
       acceptance_rate = n_accepted / nsim,
